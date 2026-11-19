@@ -215,3 +215,7 @@ dialog::backdrop { background: #0006; }
 .field .control .group.paste-key > .sub { flex-basis: 100%; }
 p.lead { margin: .3rem 0 .6rem; max-width: 60rem; }
 .buttons-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+/* A repository with an address: its folder, Clone here, and what came of it (item clone). */
+.field .control .group.clone { flex: 1 1 24rem; max-width: 44rem; flex-wrap: wrap; }
+.field .control .group.clone input { flex: 1 1 18rem; max-width: none; }
+.field .control .group.clone .clone-status { display: inline; }

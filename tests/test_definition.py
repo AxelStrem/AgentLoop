@@ -22,11 +22,13 @@ def definition_text(description: str = DESCRIPTION, repos=(("code", "The code"),
     """A definition document made from the library's template, as `<name>.project.os` holds it.
     `tools` are (file, sha256, systems) for its Tools list, left out when there are none."""
     def entries(pairs):
+        # (name, about), and for a repository optionally its url and branch after them.
         lines = []
-        for name, about in pairs:
+        for name, about, *more in pairs:
             lines += ["        - {", f"            - name = {json.dumps(name)}"]
-            if about:
-                lines.append(f"            - about = {json.dumps(about)}")
+            for field, value in zip(("about", "url", "branch"), (about, *more)):
+                if value:
+                    lines.append(f"            - {field} = {json.dumps(value)}")
             lines.append("        }")
         return lines
     return "\n".join([

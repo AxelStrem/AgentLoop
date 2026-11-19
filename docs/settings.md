@@ -123,6 +123,18 @@ key read from standard input rather than a key file (see "The agents' key"). On 
 for the ones left out, and asks again for one that is refused. Without a terminal it names every
 flag still needed and saves nothing.
 
+A repository the definition gives an address, its `url` and maybe a `branch` (item `clone`), shows
+that address beside its folder, and the folder is offered: beside the folder given for another of
+the project's repositories, else `<home>/<project>/<repo>` under this machine's home. **Clone here**
+clones it into that folder when the folder is missing or empty, and uses it as it is when it is a
+clone of that address already, over https or ssh alike. A folder holding anything else is refused,
+by name, and nothing in it is touched. The clone is the person's own git with their own
+credentials; on the page git asks for no password, so a repository that needs one it does not
+keep fails. A clone that fails says which repository and stops: nothing is retried another way.
+`agentloop add --clone` clones each `--repo` path the same way before the add checks it, and on a
+terminal `agentloop add` offers the folder and asks before cloning. A repository with no address
+asks for a folder, as above.
+
 When the server or the key file is not the worker's, the loop carries them as its `overseer`
 (below), and the page shows the server's host beside its project. The worker is still the Claude
 account it runs on.

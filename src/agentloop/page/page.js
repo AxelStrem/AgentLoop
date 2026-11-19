@@ -1027,7 +1027,21 @@ async function addFromTracker() {
     shown.repos.forEach((repo, index) => {
       const input = h("input", { "data-repo": repo.name, placeholder: "a folder inside a git repository" });
       const about = [index === 0 ? "Sessions run here." : "", repo.about || ""].filter(Boolean).join(" ");
-      parts.push(field(repo.name, about || "A repository the project names.", input, `repos.${repo.name}`));
+      // Any repository's folder given moves the folders offered for those with an address.
+      input.addEventListener("input", () => { delete input.dataset.offered; offerFolders(); });
+      if (!repo.url) {
+        parts.push(field(repo.name, about || "A repository the project names.", input, `repos.${repo.name}`));
+        return;
+      }
+      // A repository the definition gives an address: its folder offered, and cloned into on
+      // request (item clone). The folder offered follows the ones the person gives.
+      input.dataset.offered = "1";
+      const status = h("span", { class: "sub clone-status" });
+      const button = h("button", { type: "button", text: "Clone here" });
+      button.addEventListener("click", () => cloneInto(repo, input, button, status));
+      const from = `Cloned from ${repo.url}${repo.branch ? `, branch ${repo.branch}` : ""}: Clone here clones it into an empty or new folder; a folder holding a clone of it is used as it is.`;
+      parts.push(field(repo.name, [about && !/[.!?]$/.test(about) ? `${about}.` : about, from].filter(Boolean).join(" "),
+        h("span", { class: "group clone" }, input, button, status), `repos.${repo.name}`));
     });
     for (const place of shown.places) {
       const input = h("input", { "data-place": place.name, placeholder: "a folder; never committed" });
@@ -1039,7 +1053,44 @@ async function addFromTracker() {
     const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults], ["the project", shown.settings]]);
     settingsPart = settingsEditor({}, beneath);
     parts.push(h("h3", { text: "Run settings" }), settingsPart.el);
-    shownBox.replaceChildren(...parts);
+    // A part left out is null, which replaceChildren would write as text.
+    shownBox.replaceChildren(...parts.filter(Boolean));
+    offerFolders();
+  };
+
+  // The folder offered for a repository with an address: beside the first folder the person gave
+  // another repository, else `<home>/<project>/<repo>` on this machine (item clone).
+  const parentOf = (path) => {
+    const trimmed = path.replace(/[\\/]+$/, "");
+    const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+    return cut > 0 ? trimmed.slice(0, cut) : trimmed;
+  };
+  const offerFolders = () => {
+    const inputs = [...root.querySelectorAll("[data-repo]")];
+    const picked = inputs.find((i) => !i.dataset.offered && i.value.trim());
+    const base = picked ? parentOf(picked.value.trim()) : `${shown.home}/${shown.project}`;
+    for (const input of inputs) if (input.dataset.offered) input.value = `${base}/${input.dataset.repo}`;
+  };
+  const cloneInto = async (repo, input, button, status) => {
+    clearMarks();
+    const problems = $("editor-problems");
+    button.disabled = true;
+    status.className = "sub clone-status";
+    status.textContent = "cloning…";
+    try {
+      const done = await api("POST", "/api/clone", { ...form(), repo: repo.name, folder: input.value.trim() });
+      delete input.dataset.offered;
+      status.textContent = done.cloned ? "cloned" : "a clone of it already, used as it is";
+      problems.hidden = true;
+    } catch (error) {
+      status.className = "problem clone-status";
+      status.textContent = "not cloned";
+      problems.textContent = error.message;
+      problems.hidden = false;
+      if (error instanceof ApiError && error.data.field) mark(error.data.field);
+    } finally {
+      button.disabled = false;
+    }
   };
 
   const form = () => ({ address: addressInput.value.trim(), keyFile: keyInput.value.trim() || null, worker: worker.value });

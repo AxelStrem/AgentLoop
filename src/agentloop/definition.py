@@ -145,15 +145,17 @@ def _tools(node: dict | None) -> list[dict]:
     return tools
 
 
-def _entries(node: dict | None) -> list[dict]:
+def _entries(node: dict | None, fields: tuple[str, ...] = ("about",)) -> list[dict]:
     """A list's entries as {"name", "about"}, in order; an entry with no name is still one, for
-    the checks to name."""
+    the checks to name. A field left empty is left out, so that an entry without it reads as it
+    did before the field was there."""
     entries = []
     for entry in (node or {}).get("children") or []:
         item = {"name": _value(_child(entry, "name"))}
-        about = _value(_child(entry, "about"))
-        if about:
-            item["about"] = about
+        for field in fields:
+            value = _value(_child(entry, field))
+            if value:
+                item[field] = value
         entries.append(item)
     return entries
 
@@ -168,7 +170,8 @@ def from_node(node: dict, where: str) -> dict:
         raise config.ConfigError(where, "settings", f"not JSON: {error.msg}") from None
     raw = {
         "description": _value(_child(node, "description")),
-        "repos": _entries(_child(node, "Repos")),
+        # A repository may name where it is cloned from, and its branch (item clone).
+        "repos": _entries(_child(node, "Repos"), ("about", "url", "branch")),
         "places": _entries(_child(node, "Places")),
         # Empty means every system, as a bundle's absent `systems` does.
         "systems": systems or None,
@@ -864,6 +867,9 @@ def preview(settings: config.Settings, address: str, key_file: str | None, worke
         "systemProblem": system_problem,
         "repos": raw["repos"],
         "places": raw.get("places") or [],
+        # This machine's home, for the folder a repository with an address is offered to be cloned
+        # into: `<home>/<project>/<repo>` (item clone).
+        "home": Path.home().as_posix(),
         "settings": raw.get("settings") or {},
         # The project's tools, each with whether it is for this machine's system and so fetched
         # when the loop is added (item tools-fetch).
@@ -936,6 +942,32 @@ def add(settings: config.Settings, *, name: str, address: str, key_file: str | N
         save(new)
     keep(home, tracker, raw)
     return new
+
+
+def clone(settings: config.Settings, address: str, key_file: str | None, worker: str, repo: str, folder: str,
+          *, interactive: bool = False, timeout: float = 30.0) -> dict:
+    """A repository the tracker's definition names, cloned from the address the definition gives it
+    into `folder` - or the folder used as it is, when it is a clone of that address already (item
+    clone). The address is the definition's, read again here, never one the caller sends. Answers
+    {"folder", "cloned"}; refuses, on `repos.<repo>`, a repository with no address, a folder
+    holding anything else and a clone that fails."""
+    from agentloop import clones
+
+    server, key, tracker, _own = _reach(settings, address, key_file, worker)
+    raw = fetch(server, config.expand(key), tracker, timeout)
+    entry = next((e for e in raw["repos"] if e.get("name") == repo), None)
+    field = f"repos.{repo}"
+    if entry is None:
+        raise config.ConfigError(NEW, field, f"{config.tracker_project(tracker) or tracker} names no repository {repo}")
+    if not entry.get("url"):
+        raise config.ConfigError(NEW, field, f"the definition gives {repo} no address to clone it from")
+    if not isinstance(folder, str) or not folder.strip():
+        raise config.ConfigError(NEW, field, "the folder to clone it into")
+    where = config.expand(folder.strip())
+    if not where.is_absolute():
+        raise config.ConfigError(NEW, field, "a whole path, from the top of its drive")
+    cloned = clones.clone(repo, where, entry["url"], entry.get("branch", ""), interactive=interactive)
+    return {"folder": folder.strip(), "cloned": cloned}
 
 
 # Moving a loop from its bundle to its tracker (item retarget)

@@ -86,6 +86,9 @@ def _parser() -> argparse.ArgumentParser:
     new.add_argument("--name", help="the loop's name; the project's when left out")
     new.add_argument("--repo", action="append", metavar="NAME=PATH", help="where a repository the project names is; asked for when left out")
     new.add_argument("--place", action="append", metavar="NAME=PATH", help="where a place the project names is; asked for when left out")
+    new.add_argument("--clone", action="store_true",
+                     help="clone each repository the definition gives an address into its --repo path, when that "
+                          "folder is missing or empty; one that is a clone of it already is used as it is")
     # retarget, export-definition and import-psd1 are the bundles' way, which goes with item
     # drop-bundle-source: they still work, but given no help, the command list does not name them.
     ret = sub.add_parser("retarget")
@@ -313,6 +316,10 @@ def _read_key() -> str:
     return sys.stdin.readline()
 
 
+class CloneFailed(Exception):
+    """A repository `agentloop add` was asked to clone could not be; it has said why."""
+
+
 def _add(args: argparse.Namespace) -> int:
     """`add` (item loop-from-url): a loop on a tracker added from its address, as the page's form
     adds one - the definition read and shown, then a path asked for each repository and place it
@@ -358,27 +365,82 @@ def _add(args: argparse.Namespace) -> int:
     if shown["systemProblem"]:
         print(f"agentloop add: systems: {shown['systemProblem']}", file=sys.stderr)
         return 2
+    from agentloop import clones
+
     asked = [("repos", e, repos, "Sessions run here. " if i == 0 else "") for i, e in enumerate(shown["repos"])]
     asked += [("places", e, places, "") for e in shown["places"]]
     for kind, entry, given, more in asked:
         line = f"  {'repository' if kind == 'repos' else 'place':<10} {entry['name']}"
         about = more + (entry.get("about") or "")
         print(line + (f" - {about}" if about else "") + (f": {given[entry['name']]}" if entry["name"] in given else ""))
+        if entry.get("url"):
+            print(f"{'':13}cloned from {clones.without_credentials(entry['url'])}"
+                  + (f", branch {entry['branch']}" if entry.get("branch") else ""))
     print("")
 
+    def cloned_into(entry: dict, folder: str, interactive: bool) -> bool:
+        """The repository cloned into `folder`, or that folder used as it is; False, said, when it
+        is refused or the clone fails (item clone)."""
+        try:
+            done = clones.clone(entry["name"], config.expand(folder), entry["url"], entry.get("branch", ""),
+                                interactive=interactive)
+        except config.ConfigError as error:
+            print(f"agentloop add: {error.field or 'clone'}: {error.message}", file=sys.stderr)
+            return False
+        print(f"{entry['name']}: cloned into {folder}" if done else f"{entry['name']}: {folder} is a clone of it already, used as it is")
+        return True
+
     def ask(kind: str, entry: dict, given: dict[str, str]) -> None:
+        if kind == "repos" and entry.get("url"):
+            ask_clone(entry, given)
+            return
         what = "a folder inside a git repository" if kind == "repos" else "a folder; never committed"
         answer = input(f"{entry['name']} ({what}): ").strip()
         if answer:
             given[entry["name"]] = answer
 
+    def ask_clone(entry: dict, given: dict[str, str]) -> None:
+        """A repository with an address: a folder asked for, beside the others already given or
+        under the home folder, and cloned into when it is missing or empty (item clone)."""
+        while True:
+            default = clones.default_folder(Path.home(), shown["project"], entry["name"], list(repos.values()))
+            answer = input(f"{entry['name']} (a folder to clone it into, or where it is cloned already) [{default.as_posix()}]: ").strip()
+            folder = answer or default.as_posix()
+            try:
+                found = clones.state(entry["name"], config.expand(folder), entry["url"])
+            except config.ConfigError as error:
+                # A folder holding anything else is refused by name, and another asked for.
+                print(f"agentloop add: {error.field}: {error.message}", file=sys.stderr)
+                continue
+            if found == clones.EMPTY:
+                yes = input(f"clone {clones.without_credentials(entry['url'])} into {folder}? [Y/n]: ").strip().lower()
+                if yes not in ("", "y", "yes"):
+                    continue
+            if not cloned_into(entry, folder, True):
+                # A clone that fails stops the add: nothing is retried another way.
+                raise CloneFailed()
+            given[entry["name"]] = folder
+            return
+
+    if args.clone:
+        # The paths given, each cloned into before the add checks them (item clone).
+        for kind, entry, given, _ in asked:
+            if kind == "repos" and entry.get("url") and entry["name"] in given:
+                if not cloned_into(entry, given[entry["name"]], _interactive()):
+                    return 2
     left = [(kind, entry, given) for kind, entry, given, _ in asked if entry["name"] not in given]
     if left and not _interactive():
         flags = " ".join(f"--{'repo' if kind == 'repos' else 'place'} {entry['name']}=<path>" for kind, entry, _ in left)
         print(f"agentloop add: say where each is on this machine: {flags}", file=sys.stderr)
+        if any(kind == "repos" and entry.get("url") for kind, entry, _ in left):
+            print("agentloop add: and --clone, to clone a repository the definition gives an address into its path",
+                  file=sys.stderr)
         return 2
-    for kind, entry, given in left:
-        ask(kind, entry, given)
+    try:
+        for kind, entry, given in left:
+            ask(kind, entry, given)
+    except CloneFailed:
+        return 2
     name = args.name or shown["project"]
     while True:
         try:
@@ -405,7 +467,10 @@ def _add(args: argparse.Namespace) -> int:
                 if entry is None:
                     return 2
                 (repos if kind == "repos" else places).pop(which, None)
-                ask(kind, entry, repos if kind == "repos" else places)
+                try:
+                    ask(kind, entry, repos if kind == "repos" else places)
+                except CloneFailed:
+                    return 2
     print(f"loop    {new['name']}  on {new['tracker']}" + (f" ({shown['server']})" if "overseer" in new else ""))
     print(f"Start it with: agentloop start {new['name']}")
     return 0

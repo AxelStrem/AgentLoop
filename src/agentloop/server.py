@@ -138,6 +138,7 @@ ROUTES = [
     ("POST", r"/api/loops", "add_loop"),
     ("POST", r"/api/loops/from-tracker", "add_from_tracker"),
     ("POST", r"/api/definition", "read_definition"),
+    ("POST", r"/api/clone", "clone"),
     ("POST", r"/api/keys", "save_key"),
     ("GET", r"/api/loops/([^/]+)", "get_loop"),
     ("PUT", r"/api/loops/([^/]+)", "put_loop"),
@@ -450,6 +451,17 @@ class Handler(BaseHTTPRequestHandler):
         and ask for its paths (item loop-from-url). Nothing is written."""
         body = self._tracker_form()
         self._json(definition.preview(config.load_settings(), body["address"], body.get("keyFile"), body["worker"]))
+
+    def route_clone(self) -> None:
+        """A repository of the tracker's definition cloned into the folder the form gives it, or
+        that folder used as it is when it is a clone of it already (item clone):
+        {"address", "keyFile", "worker", "repo", "folder"}, answered {"folder", "cloned"}."""
+        body = self._tracker_form()
+        for key in ("repo", "folder"):
+            if not isinstance(body.get(key), str):
+                raise config.ConfigError(definition.NEW, key, "missing")
+        self._json(definition.clone(config.load_settings(), body["address"], body.get("keyFile"), body["worker"],
+                                    body["repo"], body["folder"]))
 
     def route_save_key(self) -> None:
         """A pasted key checked against its server and written to a file only this person can read

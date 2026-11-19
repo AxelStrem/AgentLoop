@@ -66,7 +66,8 @@ You start with none. Then:
    and fills in the key file's path. A key file you made yourself works as well.
 3. Add a loop from the tracker's address: on **Loops** use **Add from a tracker**, or run
    `agentloop add <address>`. It shows what the project names and asks where each of its
-   repositories is cloned on this PC. `agentloop add --key-stdin` takes the agents' key on standard
+   repositories is cloned on this PC. A repository the definition gives an address can be cloned
+   there instead: **Clone here** on the page, or `--clone` (asked on a terminal). `agentloop add --key-stdin` takes the agents' key on standard
    input, unseen on a terminal, and keeps it as **Paste a key** does.
 4. Start it.
 

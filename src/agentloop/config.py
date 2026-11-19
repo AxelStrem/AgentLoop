@@ -365,16 +365,21 @@ def check_bundle(raw: dict, where: str, folder_name: str) -> None:
     check_project(raw, where)
 
 
-def _check_entries(where: str, key: str, entries: list, what: str) -> list[str]:
-    """A list of repositories or places, each a bare name or {"name", "about"}: their names."""
+def _check_entries(where: str, key: str, entries: list, what: str, more: tuple[str, ...] = ()) -> list[str]:
+    """A list of repositories or places, each a bare name or {"name", "about"}: their names. A
+    repository may also name its `url` and `branch` (item clone), given as `more`."""
     names = []
     for index, entry in enumerate(entries):
         at = f"{key}[{index}]"
         if isinstance(entry, dict):
-            if set(entry) - {"name", "about"}:
-                raise ConfigError(where, at, f'a {what} is its name, or {{"name", "about"}}')
+            if set(entry) - {"name", "about", *more}:
+                shape = ", ".join(f'"{f}"' for f in ("name", "about", *more))
+                raise ConfigError(where, at, f'a {what} is its name, or {{{shape}}}')
             if entry.get("about") is not None and not isinstance(entry["about"], str):
                 raise ConfigError(where, f"{at}.about", f"a line saying what the {what} is")
+            for field in more:
+                if entry.get(field) is not None and not isinstance(entry[field], str):
+                    raise ConfigError(where, f"{at}.{field}", "text")
             name = entry.get("name")
             at = f"{at}.name"
         else:
@@ -391,7 +396,7 @@ def check_project(raw: dict, where: str) -> None:
     repos = raw.get("repos")
     if not isinstance(repos, list):
         raise ConfigError(where, "repos", "a list of repository names")
-    names = _check_entries(where, "repos", repos, "repository")
+    names = _check_entries(where, "repos", repos, "repository", ("url", "branch"))
     if len(set(names)) != len(names):
         raise ConfigError(where, "repos", "names a repository twice")
     if not names:

@@ -92,7 +92,8 @@ line naming both versions and saying which side to update.
    sessions may read or file into. If someone hands you a project, they share it with your
    accounts.
 4. **Get the code.** Clone the repositories the project names: **Add from a tracker** (step 6)
-   shows each of them, with a line saying what it is.
+   shows each of them, with a line saying what it is, and offers **Clone here** for each one whose
+   address the project gives.
 5. **Add a worker:** on **This machine**, or `agentloop accounts list`, which also lists the
    Claude config folders it found that are not added yet. `agentloop accounts add <folder>` adds one
    (`default` for `~/.claude`), and `agentloop accounts login <worker>` prints the command that logs
