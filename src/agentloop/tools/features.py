@@ -47,12 +47,17 @@ HANDLE = re.compile(r'[A-Z0-9][A-Z0-9-]*')
 class Features:
     def __init__(self, path):
         self.t = tracker.open_tracker(path)
-        if self.t.header('Features') is None:
+        # A tracker with no features yet writes no `- Features` line, but the template it inherits
+        # declares the list, so it is there, empty, and the first add writes it.
+        if self.t.header('Features') is None and not (
+                self.t.base() and self.t.base_tracker().header('Features') is not None):
             sys.exit(f'no feature list in {self.t.path.name}: it has no list Features')
 
     def all(self):
         """Every feature, as (first line, last line, fields), its Detail texts among the fields."""
         found = []
+        if self.t.header('Features') is None:
+            return found
         for top, bottom, f in self.t.entries('Features'):
             f.setdefault('standing', DEFAULT_STANDING)
             detail = self.t.block(top, bottom, 'div Detail')

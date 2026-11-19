@@ -69,10 +69,10 @@ def fake_server(tmp_path):
     key = tmp_path / "key"
     key.write_text("fake-key", encoding="utf-8")
 
-    def run(*args):
+    def run(*args, script=TRACKER_PY):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("AGENT_", "OVERSEER_")) and k != "AGENTIC_LOOP"}
         env.update(OVERSEER_URL=f"http://127.0.0.1:{server.server_address[1]}", OVERSEER_KEY_FILE=str(key))
-        return subprocess.run([sys.executable, str(TRACKER_PY), "--doc", "a/proj.os", *args],
+        return subprocess.run([sys.executable, str(script), "--doc", "a/proj.os", *args],
                               capture_output=True, text=True, encoding="utf-8", env=env)
 
     try:

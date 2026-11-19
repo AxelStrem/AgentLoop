@@ -399,6 +399,15 @@ class Tracker:
                     return m.group(1)
         sys.exit(f'no top-level node above line {at + 1} of {self.path.name}')
 
+    def root(self):
+        """The name of the document's top-level node - `project` - where a list the document has not
+        written yet is addressed from."""
+        first = next((i for i, l in enumerate(self.lines)
+                      if l and not l[0].isspace() and not l.startswith(('//', '}'))), None)
+        if first is None:
+            sys.exit(f'no top-level node in {self.path.name}')
+        return self.root_of(first)
+
     def address_at(self, top):
         """The address of the entry whose first line is `top`: `project/Items/[parser]`."""
         for name in ('Items', 'History', 'Features'):
@@ -413,9 +422,12 @@ class Tracker:
         sys.exit(f'line {top + 1} of {self.path.name} is in no list of entries')
 
     def append_entry(self, name, fields):
-        """A new entry at the end of a top-level list, from fields as this file writes them."""
+        """A new entry at the end of a top-level list, from fields as this file writes them. A list
+        the template declares is there to append to before the document writes any of it - a first
+        feature - and is addressed from the document's root until then."""
         start = self.header(name)
-        self.server.append(self.name, f'{self.root_of(start)}/{name}', {k: typed(k, v) for k, v in fields.items()})
+        root = self.root() if start is None else self.root_of(start)
+        self.server.append(self.name, f'{root}/{name}', {k: typed(k, v) for k, v in fields.items()})
         self.reload()
 
     @property
@@ -484,11 +496,13 @@ class Tracker:
         """The line a top-level list starts on, or None. A tracker writing the whole project has
         `list Items (entry=<Item>, ...) {`; one inheriting the project template holds only the
         entries, `- Items {` - or `- Items { }`, empty on one line, as a save writes it. A part file
-        holds one list at its top, with nothing of the template's: `list History {`."""
+        holds one list at its top, with nothing of the template's: `list History {`. And the server,
+        appending to a list the template declares and the document has not written yet - a first
+        feature - writes it so inside the root, `    list Features {`."""
         for i, line in enumerate(self.lines):
             own = line.strip()
-            if (own.startswith(f'list {name} (') or own in (f'- {name} {{', f'- {name} {{ }}')
-                    or line in (f'list {name} {{', f'list {name} {{ }}')):
+            if (own.startswith(f'list {name} (')
+                    or own in (f'- {name} {{', f'- {name} {{ }}', f'list {name} {{', f'list {name} {{ }}')):
                 return i
         return None
 
