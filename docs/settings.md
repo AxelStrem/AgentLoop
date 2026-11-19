@@ -29,6 +29,23 @@ detected and converted rather than guessed at.
   old file, not half of a new one. Keys the app does not know are kept as they were.
 - A secret is never in these files: `keyFile` is the path of a file that holds the key.
 
+## The agents' key
+
+A key pasted into **Paste a key** - beside the key file, in a worker's editor and in **Add from a
+tracker** - or given to `agentloop add --key-stdin` (item `paste-key`) is sent to its server once,
+`GET /account/me`, as the check that it signs in; nothing is written for one the server refuses. It
+is then written to `keys/<host>-<account>.key` in the config folder, and `keyFile` holds that path:
+
+- macOS and Linux: `keys/` is `0700` and the file `0600`.
+- Windows: `keys/`, before any key is written into it, and then the file have an ACL naming the
+  current user alone, with nothing inherited (`icacls`); the app checks the ACL after setting it,
+  and removes the file rather than leave it readable by others.
+
+The key is not written to the settings, a log or any answer of the page. The server it is for is
+the one the worker's editor names, or in **Add from a tracker** the address's, else the worker's.
+Pasting a key for the same server and account again overwrites its file. A file is never deleted
+with the setting that named it: a worker whose server is turned off says where its key file is left.
+
 ## The bundle
 
 A folder named after the project, handed over whole (zipped, or as a repository of its own):
@@ -131,7 +148,8 @@ The tools for this system are fetched before anything is saved: one the server d
 gives with another sha256, refuses the add. Once saved, the loop's `definition.json` is the
 definition just read, so its first run starts from it, and a later edit is a change (below).
 
-`agentloop add` takes `--repo name=path` and `--place name=path` for each. On a terminal it asks
+`agentloop add` takes `--repo name=path` and `--place name=path` for each, and `--key-stdin` for a
+key read from standard input rather than a key file (see "The agents' key"). On a terminal it asks
 for the ones left out, and asks again for one that is refused. Without a terminal it names every
 flag still needed and saves nothing.
 

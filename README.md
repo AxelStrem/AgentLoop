@@ -98,14 +98,15 @@ line naming both versions and saying which side to update.
 6. **Add a worker:** on **This machine**, or `agentloop accounts list`, which also lists the
    Claude config folders it found that are not added yet. `agentloop accounts add <folder>` adds one
    (`default` for `~/.claude`), and `agentloop accounts login <worker>` prints the command that logs
-   it in. Give the worker the server's address and the path of the file that holds the agents' key.
-   The key itself never goes in the settings. The server and key belong to the worker, so one
+   it in. Give the worker the server's address and the agents' key: paste it into **Paste a key**,
+   and AgentLoop checks it signs in and keeps it in a file only you can read - or give the path of
+   a key file of your own. The key itself never goes in the settings. The server and key belong to the worker, so one
    machine can work trackers on two servers through two workers, one for each.
 7. **Add a loop and start it.** From a tracker's address: on **Loops**, **Add from a tracker**.
    Give the address as Overseer's page shows it, the key file for that server (the worker's when
    left empty) and the worker, then **Read**. The page shows what the project is and names, and
    asks where each repository and place is on this PC. On a machine with no browser, run
-   `agentloop add <address>` instead. A tracker on another server than the worker's is fine: the
+   `agentloop add <address>` instead, with `--key-stdin` to pipe or type the key in. A tracker on another server than the worker's is fine: the
    loop then carries that server and key file itself. From a bundle: **Add from a bundle**, on the
    bundle and the worker, and set each repository's folder. Then start it.
 

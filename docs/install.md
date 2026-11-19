@@ -34,12 +34,14 @@ agentloop serve --open
 This prints the page's address and opens it. The page writes the settings as you add things to it.
 You start with none. Then:
 
-1. Get an account on the tracker's Overseer server, and one for the agents with a key in a file of
-   its own.
-2. Add a worker: a Claude account, with the server's address and the key file's path.
+1. Get an account on the tracker's Overseer server, and a key for the agents, made on its page.
+2. Add a worker: a Claude account, with the server's address. Paste the agents' key into **Paste a
+   key** and **Save key**: AgentLoop checks that it signs in, keeps it in a file only you can read,
+   and fills in the key file's path. A key file you made yourself works as well.
 3. Add a loop. Given a tracker's address, on **Loops** use **Add from a tracker**, or run
    `agentloop add <address>`: it shows what the project names and asks where each of its
-   repositories is cloned on this PC. Given a bundle, first add its folder on **This machine**,
+   repositories is cloned on this PC. `agentloop add --key-stdin` takes the agents' key on standard
+   input, unseen on a terminal, and keeps it as **Paste a key** does. Given a bundle, first add its folder on **This machine**,
    then **Add from a bundle**.
 4. Start it.
 

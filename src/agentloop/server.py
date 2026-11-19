@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from agentloop import accounts, config, definition, runner, session, usage
+from agentloop import accounts, config, definition, keys, runner, session, usage
 from agentloop import loop as loop_mod
 
 HOST = "127.0.0.1"
@@ -138,6 +138,7 @@ ROUTES = [
     ("POST", r"/api/loops", "add_loop"),
     ("POST", r"/api/loops/from-tracker", "add_from_tracker"),
     ("POST", r"/api/definition", "read_definition"),
+    ("POST", r"/api/keys", "save_key"),
     ("GET", r"/api/loops/([^/]+)", "get_loop"),
     ("PUT", r"/api/loops/([^/]+)", "put_loop"),
     ("DELETE", r"/api/loops/([^/]+)", "delete_loop"),
@@ -449,6 +450,25 @@ class Handler(BaseHTTPRequestHandler):
         and ask for its paths (item loop-from-url). Nothing is written."""
         body = self._tracker_form()
         self._json(definition.preview(config.load_settings(), body["address"], body.get("keyFile"), body["worker"]))
+
+    def route_save_key(self) -> None:
+        """A pasted key checked against its server and written to a file only this person can read
+        (item paste-key): {"key", "server"}, or {"key", "address", "worker"} for the server a loop
+        added from that address would reach. Answers the account and the file's path, never the key."""
+        body = self._body()
+        if not isinstance(body.get("key"), str):
+            raise config.ConfigError(keys.WHERE, "key", "missing")
+        if isinstance(body.get("server"), str) and body["server"].strip():
+            server = body["server"].strip()
+        elif isinstance(body.get("address"), str):
+            server = keys.server_for(config.load_settings(), body["address"], str(body.get("worker") or ""))
+        else:
+            raise config.ConfigError(keys.WHERE, "server", "the server the key is for")
+        try:
+            account, path = keys.save(server, body["key"])
+        except keys.PrivacyError as error:
+            raise Refused(HTTPStatus.INTERNAL_SERVER_ERROR, f"The key file could not be made private: {error}.") from None
+        self._json({"account": account, "path": config.home_relative(path)})
 
     def route_add_from_tracker(self) -> None:
         """A loop on a tracker added from its address, checked whole before it is saved (item

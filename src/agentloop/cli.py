@@ -79,6 +79,9 @@ def _parser() -> argparse.ArgumentParser:
     new = sub.add_parser("add", help="add a loop on a tracker from its address, asking where its repositories are")
     new.add_argument("address", help="Overseer's address of the tracker (https://host/doc/alice/projects/x.os), or its name there")
     new.add_argument("--key-file", help="the file holding the agents' key for that server; the worker's when left out")
+    new.add_argument("--key-stdin", action="store_true",
+                     help="read the agents' key from standard input - asked for unseen on a terminal - and keep it in a "
+                          "file only you can read, in the config folder's keys/; never on the command line")
     new.add_argument("--worker", help="the Claude account it runs on; the default worker when left out")
     new.add_argument("--name", help="the loop's name; the project's when left out")
     new.add_argument("--repo", action="append", metavar="NAME=PATH", help="where a repository the project names is; asked for when left out")
@@ -298,11 +301,21 @@ def _interactive() -> bool:
     return sys.stdin.isatty()
 
 
+def _read_key() -> str:
+    """The agents' key from standard input: asked for, unseen, on a terminal; else the first line
+    of what is piped in. Never an argument, which other people on the machine can see."""
+    if _interactive():
+        import getpass
+
+        return getpass.getpass("the agents' key (not shown): ")
+    return sys.stdin.readline()
+
+
 def _add(args: argparse.Namespace) -> int:
     """`add` (item loop-from-url): a loop on a tracker added from its address, as the page's form
     adds one - the definition read and shown, then a path asked for each repository and place it
     names, on a terminal; given as flags, where there is none."""
-    from agentloop import config, definition
+    from agentloop import config, definition, keys
 
     def refused(error: config.ConfigError) -> int:
         problems = getattr(error, "problems", None) or [error]
@@ -314,11 +327,21 @@ def _add(args: argparse.Namespace) -> int:
         settings = config.load_settings()
         worker = args.worker or (settings.default_worker.name if settings.default_worker else "")
         repos, places = _pairs(args.repo, "--repo"), _pairs(args.place, "--place")
+        if args.key_stdin:
+            if args.key_file:
+                raise config.ConfigError(keys.WHERE, "key", "--key-stdin or --key-file, not both")
+            server = keys.server_for(settings, args.address, worker)
+            account, path = keys.save(server, _read_key())
+            args.key_file = config.home_relative(path)
+            print(f"key     signs in as {account}; kept in {args.key_file}")
         shown = definition.preview(settings, args.address, args.key_file, worker)
     except config.ConfigError as error:
         return refused(error)
     except definition.Unreachable as error:
         print(f"agentloop add: the tracker's server: {error}", file=sys.stderr)
+        return 2
+    except keys.PrivacyError as error:
+        print(f"agentloop add: the key file could not be made private: {error}", file=sys.stderr)
         return 2
 
     print(f"{shown['tracker']} on {shown['server']}" + ("" if shown["ownServer"] else f", as worker {worker} reaches it"))

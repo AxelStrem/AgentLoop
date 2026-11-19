@@ -210,5 +210,8 @@ dialog::backdrop { background: #0006; }
 /* The address of a tracker and its Read button, in the form adding a loop from it. */
 .field .control .group.address { flex: 1 1 20rem; max-width: 40rem; }
 .field .control .group.address input { max-width: none; }
+.field .control .group.paste-key { flex-wrap: wrap; }
+.field .control .group.paste-key input { flex: 1 1 14rem; max-width: 24rem; width: auto; }
+.field .control .group.paste-key > .sub { flex-basis: 100%; }
 p.lead { margin: .3rem 0 .6rem; max-width: 60rem; }
 .buttons-row { display: flex; gap: .5rem; flex-wrap: wrap; }

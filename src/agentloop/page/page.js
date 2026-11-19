@@ -1081,6 +1081,8 @@ async function addFromTracker() {
       h("span", { class: "group address" }, addressInput, readButton), "address"),
     field("key file", "The file holding the agents' key for that server. Its path is kept; the key is never read here.", keyInput, "keyFile"),
     field("worker", "The Claude account it runs on.", worker, "worker"),
+    field("paste a key", "Or paste the key itself, for the address's server or else the worker's: it is checked with the server, kept in a file only you can read, and its path goes in key file.",
+      pasteKey(keyInput, () => ({ address: addressInput.value.trim(), worker: worker.value })), "key"),
     shownBox);
 
   const body = { el: root, mark };
@@ -1298,6 +1300,35 @@ async function saveSettings(change) {
   }
 }
 
+// A key pasted in rather than a file made by hand (item paste-key): the server checks that it signs
+// in, writes it to a file only this person can read, and answers the account and the path, which
+// goes in the key-file field. The key is kept nowhere on the page: the field is emptied once saved.
+// `target` gives what says which server it is for: {server}, or {address, worker}.
+function pasteKey(keyFileInput, target) {
+  const input = h("input", { type: "password", autocomplete: "off", spellcheck: "false", placeholder: "paste the key Overseer's page made" });
+  const button = h("button", { type: "button", text: "Save key" });
+  const said = h("span", { class: "sub" });
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    input.classList.remove("wrong");
+    try {
+      const saved = await api("POST", "/api/keys", { key: input.value, ...target() });
+      input.value = "";
+      keyFileInput.value = saved.path;
+      keyFileInput.dispatchEvent(new Event("input"));
+      said.classList.remove("problem");
+      said.textContent = `Signs in as ${saved.account}; kept in ${saved.path}, readable by you alone.`;
+    } catch (error) {
+      said.classList.add("problem");
+      said.textContent = error.message;
+      if (error instanceof ApiError && error.data.field === "key") input.classList.add("wrong");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return h("span", { class: "group paste-key" }, input, button, said);
+}
+
 function editWorker(name) {
   const worker = (state.settings.workers || []).find((w) => w.name === name);
   if (!worker) return;
@@ -1312,6 +1343,8 @@ function editWorker(name) {
     field("a server", "The Overseer server the trackers are on, and the key its loops sign with.", h("label", { class: "group" }, hasServer, "this worker has one"), "overseer"),
     field("server", "The server's address.", server, "server"),
     field("key file", "Where the agents' key is kept: a path only, never the key.", keyFile, "keyFile"),
+    field("paste a key", "Or paste the key itself: it is checked with the server, kept in a file only you can read, and its path goes above.",
+      pasteKey(keyFile, () => ({ server: server.value.trim() })), "key"),
     field("manager", "The Overseer username whose items this worker's loops take first; empty for none.", manager, "manager"));
   const body = { el: root, mark: (f) => markInputs(root, f) };
   openEditor(`The worker ${name}`, body, async () => {
@@ -1323,7 +1356,10 @@ function editWorker(name) {
     });
     await loadAccounts(true);
     drawWorkers();
-    say(`${name} saved.`);
+    // A key file is never deleted with the setting that named it: say where it is left.
+    const before = (worker.overseer || {}).keyFile;
+    const left = before && (!hasServer.checked || keyFile.value.trim() !== before) ? ` The key file ${before} is left where it is.` : "";
+    say(`${name} saved.${left}`);
   });
 }
 
