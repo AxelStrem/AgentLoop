@@ -70,7 +70,7 @@ def describe(package: Path | None = None) -> str:
     """The line `agentloop version` prints."""
     record = read_build(package)
     if record is None:
-        # No build record: the source tree, or a package pip or pipx installed from a wheel, which
+        # No build record: the source tree, or a package pip, pipx or uv installed from a wheel, which
         # has no repository of its own to name a commit from (item package).
         commit, _ = source_state(package or package_dir())
         return f"agentloop {__version__} ({'from source' if commit else 'installed'})"

@@ -16,8 +16,10 @@ only, and its settings, page and commands may still change from one release to t
 
 ## Building and starting
 
-To use AgentLoop, install a release with pipx: [docs/install.md](docs/install.md). What follows is
-for a clone, to work on AgentLoop itself.
+To use AgentLoop, install a release with one line - `curl -LsSf
+https://github.com/AxelStrem/AgentLoop/releases/latest/download/install.sh | sh` on macOS and Linux,
+`irm https://github.com/AxelStrem/AgentLoop/releases/latest/download/install.ps1 | iex` on Windows:
+[docs/install.md](docs/install.md). What follows is for a clone, to work on AgentLoop itself.
 
 A loop runs from a build, never from the clone, so that editing the code cannot change a loop
 that is running. From a clone:
