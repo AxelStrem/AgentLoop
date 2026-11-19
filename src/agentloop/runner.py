@@ -85,6 +85,8 @@ class LoopStatus:
     cost: float = 0.0
     usage: str | None = None
     until: str | None = None
+    # Idle, and hearing its tracker's changes as they are made (item instant-auto).
+    watching: bool = False
     started: str | None = None
     ended: str | None = None
     exit: int | None = None

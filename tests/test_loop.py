@@ -537,7 +537,7 @@ def test_an_empty_queue_is_waited_on_and_work_taken_as_it_comes(project, fake_cl
     p.play(p.scene(move("beta", "testing"), result="COMMIT: beta: looked"))
     assert r.run() == 0
     assert len(fake_claude.calls()) == 1
-    assert " Nothing to work: looking again every 1 minutes." in p.lines
+    assert " Nothing to work: looking again every 1 minutes, and as the tracker changes." in p.lines
     assert " Work has come up. Iteration 1 of 20..." in p.lines
     assert "Stopping as asked." in p.lines
     assert p.lines.count(" Iteration 1 of 20...") == 1
@@ -545,6 +545,41 @@ def test_an_empty_queue_is_waited_on_and_work_taken_as_it_comes(project, fake_cl
     assert states[0]["state"] == "idle" and states[0]["until"] and states[0]["item"] is None
     ended = json.loads(r.status_file.read_text(encoding="utf-8"))
     assert ended["state"] == "stopped" and ended["until"] is None
+
+
+def test_a_change_to_the_tracker_is_looked_at_once_it_settles(project, fake_claude):
+    p = project(item("alpha", "testing"), autoStart=True, autoStartMinutes=60)
+    r = p.run()
+    states = []
+
+    def heard() -> None:
+        # The watch stream runs in real time on its own thread: waited for here, as the clock is
+        # the test's.
+        end = time.monotonic() + 15
+        while time.monotonic() < end and not (r.watcher and r.watcher.changes):
+            time.sleep(0.05)
+    idling(p, lambda: wait_watching(r),
+           lambda: states.append(json.loads(r.status_file.read_text(encoding="utf-8"))),
+           lambda: p.overseer.tracker(p.tracker, "file", "beta", "Beta"), heard,
+           *[lambda: None] * 4,
+           lambda: r.stop_file.write_text(""))
+    p.play(p.scene(move("beta", "testing"), result="COMMIT: beta: looked"))
+    started = p.clock.now()
+    assert r.run() == 0
+    assert len(fake_claude.calls()) == 1
+    assert states[0]["watching"] is True
+    # Looked at once the change had been still for SETTLE_SECONDS, not at the hour.
+    assert " Work has come up. Iteration 1 of 20..." in p.lines
+    assert p.clock.now() - started < 60 * 60
+    assert r.watcher is None
+    ended = json.loads(r.status_file.read_text(encoding="utf-8"))
+    assert ended["watching"] is False
+
+
+def wait_watching(r) -> None:
+    end = time.monotonic() + 15
+    while time.monotonic() < end and not (r.watcher and r.watcher.watching):
+        time.sleep(0.05)
 
 
 def test_without_auto_start_an_empty_queue_ends_the_loop(project, fake_claude):

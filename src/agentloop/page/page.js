@@ -221,7 +221,7 @@ function renderLoops() {
     const s = loop.status;
     const item = s.item ? h("span", { title: s.title || "" }, `${s.kind || ""} ${s.item}`.trim(), s.title ? h("span", { class: "sub", text: s.title }) : null) : "";
     const stateCell = [h("span", { class: "state" }, h("span", { class: `dot ${s.state}` }), s.state)];
-    if (s.until) stateCell.push(h("span", { class: "sub", text: s.state === "idle" ? `next look ${s.until}` : `until ${s.until}` }));
+    if (s.until) stateCell.push(h("span", { class: "sub", text: s.state === "idle" ? `${s.watching ? "on any change, else " : ""}next look ${s.until}` : `until ${s.until}` }));
     if (s.state === "failed" && s.error) stateCell.push(h("span", { class: "problem", text: s.error }));
     if (s.busy) stateCell.push(h("span", { class: "sub", text: s.busy }));
     if (!s.alive && loop.missing && loop.missing.length) {

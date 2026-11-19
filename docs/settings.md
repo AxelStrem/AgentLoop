@@ -316,8 +316,14 @@ A route is `{"model": "opus", "effort": "medium"}`.
 
 With `autoStart` on (item auto-start, the Auto button in the loop's row), a loop that finds nothing
 to work does not end: it stays alive, `idle`, and asks the tracker what comes next every
-`autoStartMinutes`, which spends no session. It holds its run lock and the script's mutex while it
-waits, as a running loop does. An item that comes up begins a new run, its `maxIterations` and
+`autoStartMinutes`, which spends no session. It also listens for changes to its tracker on the
+server's watch stream (`/v1/watch`, item instant-auto), and asks again once the tracker has changed
+and then been still for ten seconds - so a new item, or an answer to a question, is taken up within
+seconds, and a burst of edits is one look. The set times stay as the fallback: for a server without
+the stream or a stream that dropped (it is opened again after a pause that grows), and for an item
+freed by one closed in another project's tracker, which this tracker's stream does not tell of. The
+page's row says `on any change` while the stream is heard. It holds its run lock and the script's
+mutex while it waits, as a running loop does. An item that comes up begins a new run, its `maxIterations` and
 repeats counted afresh. A stop or a kill ends the wait at once, and so does turning the setting off,
 which a running loop reads from this file; everything else that ends a loop still ends it, and a
 loop that has ended is not started again.

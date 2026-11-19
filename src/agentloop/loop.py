@@ -44,6 +44,9 @@ Differences from the script, each deliberate:
   reports usage only between iterations.
 - `dry` is a start that stops where the first session would begin, writing its prompts; the
   script has none.
+- With `autoStart` on, a loop with nothing to work waits rather than ending, and while it waits
+  hears its tracker change through the server's watch stream (watch.py, item instant-auto); the
+  script ends on an empty queue.
 - Each session claims its item before it begins and releases it when it ends, however it ends,
   so that other loops leave it alone (item tracker-claim); the script does neither. It is claimed
   with `tracker.py claim` once the session's snapshot is taken, as the session's own work begins.
@@ -77,10 +80,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-from agentloop import accounts, colours, commits, config, definition, session, sync, tools, usage
+from agentloop import accounts, colours, commits, config, definition, session, sync, tools, usage, watch
 
 # The pause between clean iterations, in seconds.
 COOLDOWN = 5
+# How long a tracker that changed must stay still before an idle loop looks at it (item instant-auto).
+SETTLE_SECONDS = 10
 
 
 class LoopError(Exception):
@@ -524,6 +529,8 @@ class Run:
         self.taken: str | None = None
         # The conflict a merge phase is asked to resolve.
         self.conflict: sync.Conflict | None = None
+        # The tracker's watch stream while the loop is idle, for a test to see.
+        self.watcher: watch.Watcher | None = None
 
     def _status(self, **changes) -> None:
         """status.json, for the page: written on each change, whole."""
@@ -1374,7 +1381,13 @@ class Run:
         when a stop, a kill or the toggle turned off ends the wait. Both signals wait: the owner's
         answers free a queue stopped at the asked limit as new items free an empty one. A failed
         look is tried again at the next: a server away for a moment is no reason to end a loop that
-        has nothing to do. The script has nothing like this; it ends on the signal."""
+        has nothing to do. The script has nothing like this; it ends on the signal.
+
+        It looks every `autoStartMinutes`, and also once the tracker has changed and then been
+        still for `SETTLE_SECONDS`, heard through the server's watch stream (item instant-auto):
+        a burst of edits is one look, and an item is not triaged while the owner is still writing
+        it. The set times stay, for a stream that cannot be heard, and for an item freed by one in
+        another project's tracker, which this one's stream does not tell of."""
 
         def wait() -> float:
             seconds = float(self._s("autoStartMinutes")) * 60
@@ -1382,34 +1395,59 @@ class Run:
             self._status(state="idle", until=datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds"), limit=None)
             return at
 
-        self.say(f" Nothing to work: looking again every {figure(self._s('autoStartMinutes'))} minutes.", "Cyan")
-        self._status(item=None, title=None, kind=None, session=None)
+        self.say(f" Nothing to work: looking again every {figure(self._s('autoStartMinutes'))} minutes, and as the tracker changes.", "Cyan")
+        self._status(item=None, title=None, kind=None, session=None, watching=False)
         look_at = wait()
         failing = False
-        while True:
-            if self.kill_file.exists():
-                remove(self.kill_file)
-                self.say("Stopped at once, as asked, while idle.", "Yellow")
-                return None
-            if self.stop_file.exists():
-                remove(self.stop_file)
-                self.say("Stopping as asked.", "Green")
-                return None
-            if not self._auto_start():
-                self.say("Auto-start was turned off. Stopping.", "Green")
-                return None
-            if self.clock.now() >= look_at:
-                if self.lock:
-                    self.lock.retake()
-                item = self.read_next()
-                if item and not item.get("signal"):
-                    self._status(state="running", until=None)
-                    return item
-                if not item and not failing:
-                    self.say("tracker.py could not say what comes next. Trying again at the next look.", "DarkYellow")
-                failing = not item
-                look_at = wait()
-            self.clock.sleep(usage.POLL_SECONDS)
+        heard: list[str] = []
+        watcher = self._watcher(heard.append)
+        # The count of changes looked at, and the one heard last with when it was first seen.
+        looked, counted, since = 0, 0, self.clock.now()
+        try:
+            while True:
+                if self.kill_file.exists():
+                    remove(self.kill_file)
+                    self.say("Stopped at once, as asked, while idle.", "Yellow")
+                    return None
+                if self.stop_file.exists():
+                    remove(self.stop_file)
+                    self.say("Stopping as asked.", "Green")
+                    return None
+                if not self._auto_start():
+                    self.say("Auto-start was turned off. Stopping.", "Green")
+                    return None
+                while heard:
+                    self.say(heard.pop(0), "DarkYellow")
+                if bool(self.status.get("watching")) != watcher.watching:
+                    self._status(watching=watcher.watching)
+                if watcher.changes != counted:
+                    counted, since = watcher.changes, self.clock.now()
+                if counted != looked and self.clock.now() - since >= SETTLE_SECONDS:
+                    look_at = self.clock.now()
+                if self.clock.now() >= look_at:
+                    looked = counted
+                    if self.lock:
+                        self.lock.retake()
+                    item = self.read_next()
+                    if item and not item.get("signal"):
+                        self._status(state="running", until=None, watching=False)
+                        return item
+                    if not item and not failing:
+                        self.say("tracker.py could not say what comes next. Trying again at the next look.", "DarkYellow")
+                    failing = not item
+                    look_at = wait()
+                self.clock.sleep(usage.POLL_SECONDS)
+        finally:
+            watcher.stop()
+            self.watcher = None
+            self._status(watching=False)
+
+    def _watcher(self, say: Callable[[str], None]) -> watch.Watcher:
+        """The stream of the tracker the loop works, opened for one wait, on the server and with
+        the key tracker.py is given."""
+        self.watcher = watch.Watcher(str(self.overseer["server"]), config.expand(self.overseer["keyFile"]), self.tracker, say)
+        self.watcher.start()
+        return self.watcher
 
     def _begin_again(self) -> None:
         """After a wait, as a run begun now would: its items counted from the first, nothing held
