@@ -1,0 +1,214 @@
+/* The page: light and dark as the system is, and usable on a narrow window. */
+
+:root {
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --line: #d1d9e0;
+  --panel: #f6f8fa;
+  --accent: #0969da;
+  --danger: #cf222e;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --pane-bg: #fbfbfc;
+  /* Loop rows: a faint stripe to read across by, a clearer tint on the row being pointed at. */
+  --row-stripe: #f6f8fa;
+  --row-hover: #e7f0fb;
+  /* The console colours the script writes its lines in (colours.py), chosen to read on white. */
+  --c-black: #1f2328;
+  --c-darkred: #a1260d;
+  --c-darkgreen: #1a7f37;
+  --c-darkyellow: #7d6608;
+  --c-darkblue: #1f4fa8;
+  --c-darkmagenta: #8250df;
+  --c-darkcyan: #116466;
+  --c-gray: #57606a;
+  --c-darkgray: #6e7781;
+  --c-red: #cf222e;
+  --c-green: #1f883d;
+  --c-yellow: #a15c00;
+  --c-blue: #0969da;
+  --c-magenta: #bf3989;
+  --c-cyan: #0a7ea4;
+  --c-white: #1f2328;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181c;
+    --fg: #d6dbe1;
+    --muted: #8b949e;
+    --line: #30363d;
+    --panel: #1f2328;
+    --accent: #4493f8;
+    --danger: #ff7b72;
+    --ok: #57ab5a;
+    --warn: #d29922;
+    --pane-bg: #0f1114;
+    --row-stripe: #1d2025;
+    --row-hover: #1d2a3a;
+    --c-black: #8b949e;
+    --c-darkred: #f47067;
+    --c-darkgreen: #57ab5a;
+    --c-darkyellow: #c69026;
+    --c-darkblue: #539bf5;
+    --c-darkmagenta: #b083f0;
+    --c-darkcyan: #2fa4ac;
+    --c-gray: #adbac7;
+    --c-darkgray: #768390;
+    --c-red: #ff7b72;
+    --c-green: #7ee787;
+    --c-yellow: #f2cc60;
+    --c-blue: #79c0ff;
+    --c-magenta: #f778ba;
+    --c-cyan: #56d4dd;
+    --c-white: #f0f6fc;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { padding: 0 1.5rem 2rem; }
+h1 { font-size: 1.2rem; margin: 0; }
+h2 { font-size: 1.05rem; margin: 0; }
+h3 { font-size: .95rem; margin: 1rem 0 .4rem; }
+a { color: var(--accent); }
+code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 12.5px; }
+.note { color: var(--muted); }
+[hidden] { display: none !important; }
+
+.top { display: flex; align-items: center; gap: 1.5rem; padding: .7rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+.top nav { display: flex; gap: .3rem; }
+.top nav a { padding: .25rem .7rem; border-radius: 6px; text-decoration: none; color: var(--fg); }
+.top nav a.active { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.3rem 0 .6rem; flex-wrap: wrap; }
+.message { margin: .8rem 1.5rem 0; padding: .5rem .8rem; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); }
+.message.error { border-color: var(--danger); color: var(--danger); }
+
+button { font: inherit; padding: .3rem .75rem; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--danger); }
+button.small { padding: .1rem .5rem; font-size: 12.5px; }
+button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+input, select, textarea { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: .25rem .45rem; }
+input:disabled, select:disabled { color: var(--muted); background: var(--panel); }
+/* What a copy of a loop takes from the original, left as it is. */
+select.copied { color: var(--muted); background: var(--panel); }
+input.wrong, select.wrong { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+
+/* The loops: a table, cards on a narrow window. */
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12.5px; }
+td.actions { white-space: nowrap; text-align: right; }
+td.actions button { margin-left: .25rem; }
+/* The name is far from the buttons: stripes and a highlight show which row a button is on. */
+table.loops tbody tr:nth-child(even) { background: var(--row-stripe); }
+table.loops tbody tr:hover, table.loops tbody tr:focus-within { background: var(--row-hover); }
+.sub { display: block; color: var(--muted); font-size: 12.5px; }
+.chip { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--muted); border-radius: 8px; color: var(--muted); font-size: 11.5px; }
+.state { white-space: nowrap; }
+.dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .4rem; background: var(--muted); vertical-align: baseline; }
+.dot.running, .dot.starting { background: var(--ok); }
+.dot.waiting, .dot.stopping { background: var(--warn); }
+.dot.idle { background: var(--accent); }
+.dot.held { background: var(--warn); }
+button.chip { background: none; cursor: pointer; font: inherit; font-size: 11.5px; line-height: inherit; }
+.chip.warn { border-color: var(--warn); color: var(--warn); font-weight: 600; }
+ul.changes .added, pre.diff .added { color: var(--ok); }
+ul.changes .removed, pre.diff .removed { color: var(--danger); }
+pre.diff .hunk { color: var(--muted); }
+pre.diff { white-space: pre-wrap; max-height: 40vh; overflow: auto; padding: .5rem; border: 1px solid var(--line); border-radius: 4px; }
+.dot.failed { background: var(--danger); }
+.problem { color: var(--danger); font-size: 12.5px; display: block; }
+
+@media (max-width: 700px) {
+  main { padding: 0 .8rem 1.5rem; }
+  .top { padding: .6rem .8rem; gap: .8rem; }
+  table.loops thead { display: none; }
+  table.loops, table.loops tbody, table.loops tr, table.loops td { display: block; width: 100%; }
+  table.loops tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: .7rem; padding: .3rem .2rem; }
+  /* Cards are told apart by their borders; only the highlight stays. */
+  table.loops tbody tr:nth-child(even):not(:hover, :focus-within) { background: none; }
+  table.loops td { border: 0; padding: .2rem .6rem; }
+  table.loops td[data-label]::before { content: attr(data-label); display: inline-block; min-width: 6.5rem; color: var(--muted); font: 12.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  table.loops td[data-label]:empty { display: none; }
+  td.actions { text-align: left; }
+  td.actions button { margin: .2rem .3rem 0 0; }
+}
+
+/* The output panes: tabs, or side by side on a wide window. */
+.tabs { display: flex; gap: .2rem; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tab { border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: none; padding: .35rem .8rem; white-space: nowrap; }
+.tab.active { border-color: var(--line); background: var(--pane-bg); margin-bottom: -1px; }
+.panes { display: block; }
+.pane { display: none; flex-direction: column; border: 1px solid var(--line); border-top: 0; background: var(--pane-bg); min-width: 0; }
+.pane.active { display: flex; }
+.pane header { display: flex; align-items: center; gap: .6rem; padding: .35rem .6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.pane header .name { font-weight: 600; }
+.pane .usage { color: var(--c-darkcyan); font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 12px; flex: 1; min-width: 12rem; }
+.pane .lines { height: 60vh; min-height: 14rem; overflow: auto; margin: 0; padding: .5rem .7rem; font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 12.5px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pane .lines div { min-height: 1.4em; }
+.pane .follow { position: sticky; bottom: .5rem; float: right; }
+.pane .body { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.pane .jump { position: absolute; right: 1rem; bottom: .8rem; }
+.pane-header-tab { display: none; }
+
+@media (min-width: 900px) {
+  /* Twelve divides by 1, 2, 3 and 4, so arrange() can make a short row fill the width. */
+  .panes.side { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: .7rem; }
+  .panes.side .pane { display: flex; grid-column: span var(--span, 12); border-top: 1px solid var(--line); border-radius: 6px; }
+  .panes.side.rows .pane .lines { height: 38vh; }
+  .tabs.side { display: none; }
+}
+
+.c-black { color: var(--c-black); } .c-darkred { color: var(--c-darkred); }
+.c-darkgreen { color: var(--c-darkgreen); } .c-darkyellow { color: var(--c-darkyellow); }
+.c-darkblue { color: var(--c-darkblue); } .c-darkmagenta { color: var(--c-darkmagenta); }
+.c-darkcyan { color: var(--c-darkcyan); } .c-gray { color: var(--c-gray); }
+.c-darkgray { color: var(--c-darkgray); } .c-red { color: var(--c-red); font-weight: 600; }
+.c-green { color: var(--c-green); } .c-yellow { color: var(--c-yellow); }
+.c-blue { color: var(--c-blue); } .c-magenta { color: var(--c-magenta); }
+.c-cyan { color: var(--c-cyan); } .c-white { color: var(--c-white); }
+
+/* Forms: a field per line, with what it does under it. */
+.fields { display: block; }
+.field { display: grid; grid-template-columns: 13rem 1fr; gap: .2rem 1rem; padding: .55rem 0; border-bottom: 1px solid var(--line); align-items: start; }
+.field > .label { grid-column: 1; grid-row: span 4; font-weight: 600; padding-top: .25rem; }
+.field > :not(.label) { grid-column: 2; }
+.field > .label .sub { font-weight: 400; }
+.field .what { color: var(--muted); font-size: 12.5px; grid-column: 2; }
+.field .control { display: flex; flex-wrap: wrap; gap: .4rem .8rem; align-items: center; }
+.field .control input:not([type=checkbox]):not([type=radio]) { min-width: 0; flex: 1 1 16rem; max-width: 34rem; }
+.field .control input.short { flex: 0 1 7rem; }
+.field .from { color: var(--muted); font-size: 12.5px; }
+.field .problem { grid-column: 2; }
+.group { display: flex; gap: .4rem; align-items: center; }
+.field .control .group > .sub:first-child { min-width: 5.5rem; }
+.buttons, .buttons > span { display: flex; justify-content: flex-end; gap: .5rem; }
+.buttons { padding-top: 1rem; }
+.problems { color: var(--danger); white-space: pre-line; }
+form.inline { display: flex; flex-wrap: wrap; gap: .6rem 1rem; align-items: end; margin: .8rem 0; }
+form.inline label { display: flex; flex-direction: column; gap: .2rem; color: var(--muted); font-size: 12.5px; }
+form.inline input { min-width: 16rem; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: .7rem .9rem; margin-bottom: .7rem; }
+.card .head { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; flex-wrap: wrap; }
+.card .head > span { display: flex; gap: .4rem; align-items: center; }
+
+dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); padding: 1.2rem 1.4rem; width: min(52rem, 96vw); max-height: 92vh; }
+dialog::backdrop { background: #0006; }
+
+@media (max-width: 700px) {
+  .field { grid-template-columns: 1fr; }
+  .field > *, .field > .label { grid-column: 1; grid-row: auto; }
+  dialog { padding: 1rem; }
+}
+/* The address of a tracker and its Read button, in the form adding a loop from it. */
+.field .control .group.address { flex: 1 1 20rem; max-width: 40rem; }
+.field .control .group.address input { max-width: none; }
+p.lead { margin: .3rem 0 .6rem; max-width: 60rem; }
+.buttons-row { display: flex; gap: .5rem; flex-wrap: wrap; }

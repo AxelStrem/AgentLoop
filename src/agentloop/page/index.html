@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>AgentLoop</title>
+<link rel="stylesheet" href="/page.css">
+<script src="/page.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1>AgentLoop</h1>
+  <nav>
+    <a href="#loops" data-view="loops">Loops</a>
+    <a href="#machine" data-view="machine">This machine</a>
+    <a href="#bundles" data-view="bundles">Bundles</a>
+  </nav>
+</header>
+<p id="message" class="message" role="status" hidden></p>
+
+<main>
+  <section id="view-loops" class="view">
+    <div class="bar">
+      <h2>Loops</h2>
+      <span class="buttons-row">
+        <button type="button" id="add-from-tracker">Add from a tracker</button>
+        <button type="button" id="add-loop">Add from a bundle</button>
+      </span>
+    </div>
+    <table class="loops">
+      <thead><tr>
+        <th>loop</th><th>project</th><th>tracker</th><th>state</th><th>item at work</th><th>cost</th><th>worker</th><th></th>
+      </tr></thead>
+      <tbody id="loops"></tbody>
+    </table>
+    <p id="no-loops" class="note" hidden>No loops in this machine's settings yet: add one, on a bundle.</p>
+
+    <div class="bar output-bar">
+      <h2>Output</h2>
+      <label class="switch"><input type="checkbox" id="side-by-side"> side by side</label>
+    </div>
+    <div id="tabs" class="tabs" role="tablist"></div>
+    <div id="panes" class="panes"></div>
+    <p id="no-panes" class="note">A running loop's output opens here; a stopped one's, from its row.</p>
+  </section>
+
+  <section id="view-machine" class="view" hidden>
+    <div class="bar"><h2>Workers</h2></div>
+    <p class="note">Each worker is a Claude account, and the Overseer server its loops reach the trackers on, with the path of the agents' key file. The key itself is never shown.</p>
+    <div id="workers"></div>
+    <div id="found"></div>
+    <form id="add-worker" class="inline">
+      <label>Claude folder <input name="claude" placeholder="~/.claude-account3, or empty for the default account"></label>
+      <label>name <input name="name" placeholder="suggested from the folder"></label>
+      <button type="submit">Add a worker</button>
+    </form>
+
+    <div class="bar"><h2>Settings</h2></div>
+    <form id="machine-settings" class="fields"></form>
+  </section>
+
+  <section id="view-bundles" class="view" hidden>
+    <div class="bar"><h2>Bundles</h2></div>
+    <p class="note">A bundle is a project as it is handed to someone: its brief, its tools and its settings. This machine's settings list the folders they are in.</p>
+    <div id="bundles"></div>
+  </section>
+</main>
+
+<dialog id="editor">
+  <form method="dialog" id="editor-form" class="fields">
+    <h2 id="editor-title"></h2>
+    <p id="editor-problems" class="problems" hidden></p>
+    <div id="editor-body"></div>
+    <div class="buttons">
+      <button type="button" id="editor-cancel">Cancel</button>
+      <button type="submit" id="editor-save" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="before-start">
+  <form method="dialog" class="fields">
+    <h2 id="before-title"></h2>
+    <div id="before-body"></div>
+    <div class="buttons" id="before-buttons"></div>
+  </form>
+</dialog>
+
+<dialog id="definition">
+  <form method="dialog" class="fields">
+    <h2 id="definition-title"></h2>
+    <div id="definition-body"></div>
+    <div class="buttons" id="definition-buttons"></div>
+  </form>
+</dialog>
+</body>
+</html>
