@@ -7,7 +7,7 @@ import pytest
 from agentloop import config
 from agentloop.config import ConfigError
 
-EXAMPLES = Path(__file__).resolve().parents[1] / "docs" / "examples"
+EXAMPLES = Path(__file__).resolve().parent / "fixtures" / "examples"
 
 
 def _write(path: Path, data: dict) -> Path:

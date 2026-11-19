@@ -48,10 +48,8 @@ the app finds it again when it next starts.
   which ends the loop once the item at work is done; **kill**, which ends the session at work now.
   If something is missing before a loop can start (a repository's folder, a key file), the page says
   what.
-- **This machine** - the workers (the Claude accounts, and the Overseer server each reaches the trackers on, its
-  account and its key file), and the machine's settings, including the folders of the bundles it
-  knows.
-- **Bundles** - each project's settings, as its bundle holds them.
+- **This machine** - the workers (the Claude accounts, and the Overseer server each reaches the
+  trackers on, its account and its key file), and the machine's settings.
 
 The same, from a terminal:
 
@@ -71,10 +69,11 @@ agentloop --help           # every command; <command> --help for its options
 A new PC needs no settings file made by hand: the page writes the settings as you add each
 thing below, and `serve` starts with none.
 
-A project comes as a **bundle**: a folder named after the project, holding `project.json`,
-`brief.md` and `tools/`. It holds nothing of anyone's PC: no paths, no accounts, no keys. Its
-tracker is a document on an [Overseer](https://github.com/AxelStrem/Overseer) server - anyone's,
-not only the owner's. AgentLoop needs nothing of Overseer on your PC: `tracker.py` reads and
+A project comes from its tracker's address. The tracker is a document on an
+[Overseer](https://github.com/AxelStrem/Overseer) server - anyone's, not only the owner's - and the
+project's definition is a document beside it: what the project is, its repositories, the systems
+it runs on, its settings and its tools. It holds nothing of anyone's PC: no paths, no accounts, no
+keys. AgentLoop needs nothing of Overseer on your PC: `tracker.py` reads and
 writes the tracker through the server, and reads the project template the tracker inherits from
 the server too. So the server must be recent enough to hand that template out. If it is not, or
 if its template is a version this AgentLoop does not know, a session's `tracker.py` stops with one
@@ -90,33 +89,25 @@ line naming both versions and saying which side to update.
 3. **Share the tracker** with the agents' account, to edit, and the trackers beside it that its
    sessions may read or file into. If someone hands you a project, they share it with your
    accounts.
-4. **Get the code.** Clone the repositories the project names. Given a bundle rather than a
-   tracker's address, keep its folder wherever you like: the repositories are in `project.json`'s
-   `repos`.
-5. **Add the bundle,** if you were given one: on **This machine**, add its folder to the bundle
-   folders.
-6. **Add a worker:** on **This machine**, or `agentloop accounts list`, which also lists the
+4. **Get the code.** Clone the repositories the project names: **Add from a tracker** (step 6)
+   shows each of them, with a line saying what it is.
+5. **Add a worker:** on **This machine**, or `agentloop accounts list`, which also lists the
    Claude config folders it found that are not added yet. `agentloop accounts add <folder>` adds one
    (`default` for `~/.claude`), and `agentloop accounts login <worker>` prints the command that logs
    it in. Give the worker the server's address and the agents' key: paste it into **Paste a key**,
    and AgentLoop checks it signs in and keeps it in a file only you can read - or give the path of
    a key file of your own. The key itself never goes in the settings. The server and key belong to the worker, so one
    machine can work trackers on two servers through two workers, one for each.
-7. **Add a loop and start it.** From a tracker's address: on **Loops**, **Add from a tracker**.
+6. **Add a loop and start it.** From a tracker's address: on **Loops**, **Add from a tracker**.
    Give the address as Overseer's page shows it, the key file for that server (the worker's when
    left empty) and the worker, then **Read**. The page shows what the project is and names, and
    asks where each repository and place is on this PC. On a machine with no browser, run
-   `agentloop add <address>` instead, with `--key-stdin` to pipe or type the key in. A tracker on another server than the worker's is fine: the
-   loop then carries that server and key file itself. From a bundle: **Add from a bundle**, on the
-   bundle and the worker, and set each repository's folder. Then start it.
+   `agentloop add <address>` instead, with `--key-stdin` to pipe or type the key in. A tracker on another server than the
+   worker's is fine: the loop then carries that server and key file itself. Then start it.
 
 Nothing is guessed: no setting defaults to a server, a path or an account. When one a loop needs
 is missing - a repository's folder, the worker's server, the key file - the page and
 `agentloop run` say which, by name, and the loop does not start.
-
-To move a project over from `run-agent-loop.ps1`, `agentloop import-psd1 projects/<name>.psd1`
-makes its bundle, a worker and a loop in one step, for trying a brief out before its definition
-goes beside its tracker.
 
 `agentloop run <loop> --dry` checks a loop without spending a session. It reads the settings, finds
 the repositories, reads the tracker and picks the item (or the one `--item` names). It writes the
@@ -137,13 +128,13 @@ Logs are in the app's data folder (`%LOCALAPPDATA%\agentloop` on Windows,
 `~/Library/Application Support/agentloop` on macOS, `~/.local/state/agentloop` on Linux), under
 `logs/<project>/`. You get one JSON-lines transcript per session, `attempts.jsonl` (the record of
 every session on each item), and each loop's output and state under `loops/<loop>/`. They hold
-transcripts of your code, so they never go in a bundle.
+transcripts of your code, so they stay on this machine.
 
 ## Settings
 
-Every setting is in [docs/settings.md](docs/settings.md): what a bundle and the machine's
-`settings.json` hold, where each file lives on each OS, and the run settings a project or a loop
-can change. [docs/examples/](docs/examples/) has examples of both.
+Every setting is in [docs/settings.md](docs/settings.md): what a project's definition and the
+machine's `settings.json` hold, where each file lives on each OS, and the run settings a project or
+a loop can change. [docs/examples/](docs/examples/) has examples of both.
 
 ## Developing
 

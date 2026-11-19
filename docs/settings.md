@@ -1,19 +1,17 @@
-# Bundles and machine settings
+# Projects and machine settings
 
-What replaces `AgenticLoop/projects/<name>.psd1`: what each file holds, how it is written, and where
-it lives. This is the design; item `config` writes the code that reads and writes these files, and
-the examples in `docs/examples/` are what its tests load.
+What each of AgentLoop's settings holds, how it is written, and where it lives. The examples in
+[`examples/`](examples/) are loaded by the tests, so they stay ones that work.
 
-Today's `.psd1` mixes what belongs to a project with what belongs to a PC. Here they are three
-things, as the owner put them:
+A loop is made of three things:
 
 | | is | lives in | handed to someone? |
 | --- | --- | --- | --- |
-| **Project** | its definition, a document beside its tracker (below); or a bundle: a folder with the brief, the tools and `project.json` | on the Overseer server; a bundle wherever its owner keeps it | by the tracker's address; a bundle whole |
+| **Project** | its definition, a document beside its tracker, and its tools beside that | on the Overseer server | by the tracker's address, and a share |
 | **Worker** | who does the work: a Claude account and an Overseer account | machine settings | no |
 | **Loop** | a project, a worker, and where the project's repositories are on this PC | machine settings | no |
 
-A loop is what the page starts, stops, kills and starts again. A bundle holds nothing of a PC: no
+A loop is what the page starts, stops, kills and starts again. A project holds nothing of a PC: no
 path, no account, no key, no address of a server's key.
 
 ## Format
@@ -46,81 +44,53 @@ the one the worker's editor names, or in **Add from a tracker** the address's, e
 Pasting a key for the same server and account again overwrites its file. A file is never deleted
 with the setting that named it: a worker whose server is turned off says where its key file is left.
 
-## The bundle
 
-A folder named after the project, handed over whole (zipped, or as a repository of its own):
+## The project
 
-```
-quill/
-  project.json    the project's settings, below
-  brief.md        today's projects/<name>.md
-  tools/          today's projects/<name>/: the project's own scripts, e.g. look.ps1
-```
-
-`tracker.py`, `features.py`, `guard.py` and `AUTOTASK.md` are not in a bundle: they are the app's
-(item `tools`). The bundle's name is its tracker's name - `quill` for `quill.os` -
-because `<project>:<handle>` names depend on it. A folder whose name differs from its `project.json`
-`name` is an error on load.
-
-### `project.json`
-
-| field | what it is | today's `.psd1` |
-| --- | --- | --- |
-| `format` | `1` | |
-| `name` | the project, equal to the folder's name and the tracker's name without `.os` | the `.psd1`'s name |
-| `tracker` | where the tracker is, below | `Tracker`, `Server` |
-| `repos` | the repositories the project works in, in order; sessions run in the first. Each is a name, or `{"name", "about"}` with a line saying what it is | `Repos` |
-| `places` | the folders the brief names that are not repositories (`press`), each a name or `{"name", "about"}`; may be absent | paths in the brief |
-| `systems` | the systems the project runs on, from `windows`, `macos` and `linux`; absent for every one | |
-| `settings` | the project's overrides of the run settings, below; may be empty or absent | `Routes`, `Escalation`, `BuildAfterTriage`, `BuildInTriageUpTo` |
-
-`tracker` is `{"server": "alice/projects/quill.os"}`: the tracker is a document on an Overseer
-server, named as it is there. The server's address and the key file are the **worker's**
-(`overseer`). Nothing of the tracker is committed; every edit is sent as it is made.
-
-A tracker is never a file in a repository (item `simplify`): the script's
-`{"repo": ..., "path": ...}` form is refused on load, saying to put the tracker on the server.
-
-A repository name is lower case letters, digits, `-` and `_`. It is the project's own word for a
-repository (`orchard`, `orchard-server`, `orchard-docs`), not a folder name on any PC.
-
-A place is named like a repository, and is neither a repository's name nor `tools`, `bundle` or
-`python` (below). A loop on a project whose `systems` leaves out this OS is refused on start,
-saying which systems the project runs on.
-
-Not in the bundle: `Server`, `KeyFile` and `Account` (the worker's), `Repos` as paths (the loop's).
-
-## A project read from its tracker
-
-A project is defined by a document beside its tracker (item `doc-read`): `<name>.os` keeps it in
+A project is defined by a document beside its tracker: `<name>.os` keeps it in
 `<name>.project.os`, made from Overseer's `projects/project_definition.os` and mounted read-only as
 `definition`, so an agent's key can read it and the server refuses it a write. AgentLoop needs
 only the tracker's address: one `GET /v1/node` of `project/definition/definition` through the
-tracker gives the lot.
+tracker gives the lot. [`examples/quill.project.os`](examples/quill.project.os) is one.
 
-| in the definition | is, in a bundle |
+| field | what it is |
 | --- | --- |
-| `description` | `brief.md`, and the tracker's own description: one text, given to sessions as `# What the project is`, with `{name}` filled in |
-| `Repos`, `Places` | `repos`, `places`, each with `name` and `about` |
-| `systems` | `systems`; empty for every one |
-| `settings` | `settings`, as JSON text |
-| `Tools` | the bundle's `tools/`: each file with its `sha256` and `systems` (empty for every one) |
+| `description` | what the project is, its rules and how to check work on it: given to sessions as `# What the project is`, with `{name}` filled in (see "What a session is told of the machine") |
+| `Repos` | the repositories the project works in, in order, each with `name` and `about`, a line saying what it is; sessions run in the first |
+| `Places` | the folders the description names that are not repositories (`press`), each with `name` and `about`; may be empty |
+| `systems` | the systems the project runs on, from `windows`, `macos` and `linux`, comma-separated; empty for every one |
+| `settings` | the project's overrides of the run settings (below), as JSON text; may be empty |
+| `Tools` | the project's own scripts: each `file` with its `sha256` and the `systems` it is for (empty for every one) |
 
-It is checked as `project.json` is, and an error names the field: `alice/projects/x.os
-definition: settings.nope: no such setting`. The project's name is the tracker's, without `.os`.
-A project read so has no bundle folder. Its tools (item `tools-fetch`) are plain files kept beside
-the definition document on the server, in `tools/<name>.project/`, which a read share is enough to
-fetch and only an edit share can change. `Tools` lists each with its sha256 and the systems it is
-for. The ones for this machine's system are fetched into `loops/<loop>/project/tools/`, and
-`{bundle}` names `loops/<loop>/project`, so `{bundle}/tools/probe.ps1` reads as it does for a
-bundle. A file whose sha256 is not the one listed is never written, and refuses the start or the
-add, naming the file. A text file's sha256 is of its text with CRLF and a lone CR read as LF, so
-a copy whose line endings git rewrote is still the file listed; a file with a NUL byte in its
-first 8000 bytes is binary and hashed as it is (item `tools-eol`). A definition exported before
-that lists the hash of the bundle's copy as it was, which is still taken, with LF or CRLF. A
-fetched file is written as the server gave it, but a `.cmd` or `.bat` on Windows is written with
-CRLF, which cmd.exe needs. A project that lists none for this system has no `{bundle}`. A path in
-`Tools` is relative, with `/`, plain names and no `..`.
+The project's name is the tracker's, without `.os` - `quill` for `quill.os` - because
+`<project>:<handle>` names depend on it. The tracker itself is never a file in a repository: every
+edit is sent to the server as it is made.
+
+A repository name is lower case letters, digits, `-` and `_`. It is the project's own word for a
+repository (`orchard`, `orchard-server`, `orchard-docs`), not a folder name on any PC. A place is
+named like a repository, and is neither a repository's name nor `tools`, `bundle` or `python`
+(below). A loop on a project whose `systems` leaves out this OS is refused on start, saying which
+systems the project runs on. An error names the field: `alice/projects/x.os definition:
+settings.nope: no such setting`.
+
+Not in the definition: the server's address and the key file (the worker's), and the
+repositories' folders (the loop's).
+
+### Its tools
+
+The tools are plain files kept beside the definition document on the server, in
+`tools/<name>.project/`, which a read share is enough to fetch and only an edit share can change.
+`tracker.py`, `features.py`, `guard.py` and `AUTOTASK.md` are not among them: they are the app's.
+The ones for this machine's system are fetched into `loops/<loop>/project/tools/`, and `{bundle}`
+names `loops/<loop>/project`, so a description runs `{bundle}/tools/probe.ps1`. A file whose
+sha256 is not the one listed is never written, and refuses the start or the add, naming the file.
+A text file's sha256 is of its text with CRLF and a lone CR read as LF, so a copy whose line
+endings git rewrote is still the file listed; a file with a NUL byte in its first 8000 bytes is
+binary and hashed as it is. A fetched file is written as the server gave it, but a `.cmd` or
+`.bat` on Windows is written with CRLF, which cmd.exe needs. A project that lists none for this
+system has no `{bundle}`. A path in `Tools` is relative, with `/`, plain names and no `..`.
+
+### The copy a loop keeps
 
 Each loop keeps the definition it last read in `loops/<loop>/definition.json` (the tracker, a
 hash of what was read as its version, when it was read, and the definition), written only once it
@@ -157,16 +127,6 @@ When the server or the key file is not the worker's, the loop carries them as it
 (below), and the page shows the server's host beside its project. The worker is still the Claude
 account it runs on.
 
-A loop already on a bundle moves to its tracker with `agentloop retarget <loop> [<address>]` (item
-`retarget`), keeping its paths. The tracker is the bundle's `tracker.server` unless an address is
-given. The definition is read and checked as for an add, against the paths the loop has now, under
-the names the bundle used. The tracker must be the bundle's own project, since the loop's folder
-and run lock are named after it. A running loop is refused, and so is a copy (`like`): retarget the
-loop it is like, and its copies move with it. Once the checks pass, the loop gets `tracker` in place
-of `project`, its `definition.json` is kept and its tools fetched, and the bundle leaves `bundles`
-once no loop uses it. Any path in `repos` or `places` inside a bundle's folder - this one's or
-another's in `bundles` - is named as one to repoint, since a bundle need not stay once its loops
-have moved.
 
 ### When the definition changes
 
@@ -214,27 +174,6 @@ A running loop sees what is accepted within a few seconds, and goes on. A loop's
 change waits, `definition` and `missing` are judged on the changed definition, so its paths can be
 given before it is accepted.
 
-A local bundle still works, for trying a brief out before it goes on the server; the page marks a
-loop on one `local bundle`, and **Add from a bundle** and `import-psd1` still make them. They are
-to be dropped eventually, so that a project is only ever read from its tracker (item
-`drop-bundle-source`).
-
-### Moving a bundle to its tracker
-
-`agentloop export-definition <bundle> --out <folder>` writes a bundle out as what goes on the server
-(item `def-export`), laid out as the tracker's folder there: `<name>.project.os`, and each tool in
-`tools/<name>.project/` with its sha256 in the definition's `Tools`, for every system. The
-description is the tracker's own, then the brief, less its opening paragraph ("The project brief for
-the tracker ...") and its first table of `` `{name}` `` rows, whose lines become each repository's
-and place's `about`. The tracker's description is read through the default worker's server, or
-`--worker`'s, or given in a file with `--tracker-description`. The folder must be empty or missing.
-
-Nothing is written to the server. The command prints what is left, for a person with a key that
-may edit the tracker's folder: put the document beside the tracker; add
-`- definition (source="<name>.project.os/definition", lazy=false)` to the tracker's project block,
-so its mount reads it; put the tools there, with the `curl` line printed for each; and share the
-document with the agents' account to read only. It also names any repository or place no line
-describes, and a table left in the description because a row names a folder the project does not.
 
 ## Machine settings
 
@@ -243,7 +182,6 @@ One `settings.json`, in this OS's place for an app's settings.
 | field | what it is |
 | --- | --- |
 | `format` | `1` |
-| `bundles` | the paths of the bundle folders this PC knows. Each can sit wherever its owner keeps it; a new or imported one goes in `<config>/bundles/<name>` and is listed here. Item `config` reads each one's `project.json`. |
 | `workers` | a list of workers, below |
 | `defaultWorker` | the name of the worker a loop made on the page starts with; absent or `null` is the first worker (item `accounts`) |
 | `loops` | a list of loops, below |
@@ -254,7 +192,7 @@ One `settings.json`, in this OS's place for an app's settings.
 | `overseer` | none now. In settings written earlier, `{"library": ...}` named Overseer's library folder, where `tracker.py` found the template a tracker inherits, and `{"bin": ...}` the `overseer-server` it once served tracker files with. Both are let be and mean nothing: the server a worker names hands out the template too (item `own-server`) |
 
 The "other projects' trackers" a session's prompt names are the other documents in its tracker's
-folder on the server, as `tracker.py projects` lists them, where the script listed every `.psd1`.
+folder on the server, as `tracker.py projects` lists them.
 
 ### Workers
 
@@ -297,23 +235,22 @@ Overseer is needed on the machine.
 | field | what it is | today |
 | --- | --- | --- |
 | `name` | unique on this machine; the page's name for it | |
-| `project` | a bundle's name; absent when `tracker` is given | the script's `$Project` |
-| `tracker` | in place of `project`: the tracker's name on the server, e.g. `alice/projects/x.os`, whose definition the loop reads; the project is `x` | |
+| `tracker` | the tracker's name on the server, e.g. `alice/projects/x.os`, whose definition the loop reads; the project is `x` | the script's `$Project` |
 | `overseer` | absent for the worker's, or `{"server": address, "keyFile": path}`: the server and key file this loop reaches its tracker with in place of its worker's - a tracker on another server. A copy takes the loop's | |
 | `worker` | a worker's name | |
-| `repos` | a map from each repository name the bundle uses, the tracker's included, to a folder on this PC | `Repos` |
-| `places` | a map from each place the bundle names to a folder on this PC; never checked with git, never committed | |
+| `repos` | a map from each repository the definition names, the tracker's included, to a folder on this PC | `Repos` |
+| `places` | a map from each place the definition names to a folder on this PC; never checked with git, never committed | |
 | `settings` | this loop's overrides of the run settings | the script's parameters |
 | `like` | absent, or another loop's name: this loop is a copy of it | |
 
 Each path in `repos` is a folder inside a git repository; the repository is its top
 (`git rev-parse --show-toplevel`, as `Get-RepoTop` does), and that is what is committed. So
 `orchard-docs` may be placed at `.../Orchard-Docs/shared`, and `path` is relative to it.
-Two names that resolve to one repository are one repository. A name the bundle uses and the loop
+Two names that resolve to one repository are one repository. A name the definition uses and the loop
 does not place, or a folder in no repository, is an error on start, and the page asks for it.
 
 **A copy of a loop** (`like`) is how a second loop on a project is written without repeating the
-first. It takes the other loop's `project`, `worker`, `places` and `settings`, and each repository
+first. It takes the other loop's `tracker`, `overseer`, `worker`, `places` and `settings`, and each repository
 it does not place itself, so it is usually three keys:
 
 ```json
@@ -322,7 +259,7 @@ it does not place itself, so it is usually three keys:
 
 - It may set `worker` too, to run on another Claude account, which is usually why a second loop
   is run. Its `settings` are laid over the other loop's, as any layer is; its `places` replace the
-  other's one by one, as its `repos` do. A `project` or `tracker` other than the other loop's is refused.
+  other's one by one, as its `repos` do. A `tracker` other than the other loop's is refused.
 - The loop it names may not be a copy itself: one level only, so there is no chain and no cycle.
 - A change to the original reaches its copies, and the file keeps only what a copy gives itself.
 - A loop that has copies cannot be deleted or renamed; the refusal names them.
@@ -399,7 +336,7 @@ Read in this order, each layer overriding the one before:
 
 1. the app's defaults (the script's values, in the package);
 2. the machine's `defaults`;
-3. the bundle's `settings`;
+3. the project's `settings`, from its definition;
 4. the loop's `settings`.
 
 The project's choice beats a machine-wide default, and a loop's own beats both. `routes` merge per
@@ -414,7 +351,7 @@ Found with `pathlib` and the environment; no dependency.
 
 | | Windows | macOS | Linux |
 | --- | --- | --- | --- |
-| **config** (`settings.json`, `bundles/`) | `%APPDATA%\agentloop` | `~/Library/Application Support/agentloop` | `$XDG_CONFIG_HOME/agentloop`, default `~/.config/agentloop` |
+| **config** (`settings.json`, `keys/`) | `%APPDATA%\agentloop` | `~/Library/Application Support/agentloop` | `$XDG_CONFIG_HOME/agentloop`, default `~/.config/agentloop` |
 | **data** (logs, state) | `%LOCALAPPDATA%\agentloop` | `~/Library/Application Support/agentloop` | `$XDG_STATE_HOME/agentloop`, default `~/.local/state/agentloop` |
 
 The data folder is large and is not for roaming, hence `%LOCALAPPDATA%`. `AGENTLOOP_HOME`, when
@@ -424,7 +361,7 @@ tried by item `other-os`.
 
 ### Logs, records and loop state
 
-Never in a bundle: they hold transcripts of the owner's code, and a bundle is handed to others.
+They stay on this machine: they hold transcripts of the owner's code.
 
 ```
 <data>/logs/<project>/
@@ -435,8 +372,7 @@ Never in a bundle: they hold transcripts of the owner's code, and a bundle is ha
         running.json        the session at work, for kill to end and name
         stop                made by stop; the loop ends once the item at work is done
         kill                made by kill; the loop ends at once
-        system.md           AUTOTASK.md, the tracker's description and the brief, once a run;
-                            for a project read from its tracker, the definition's description
+        system.md           AUTOTASK.md and the definition's description, once a run
         definition.json     the definition last read and accepted, also for a run that cannot
                             reach the server
         definition-pending.json   a changed definition waiting to be accepted (acceptDefinition ask)
@@ -473,61 +409,24 @@ remove it.
 
 `system.md` holds a "Where you are" section after `AUTOTASK.md`: the OS, the shell the Bash tool
 runs (and on Windows the PowerShell tool), the Python to run the tools with, the app's tools
-folder, the bundle's folder, and each repository's and place's name with its folder on this PC.
-`AUTOTASK-windows.md` is added after `AUTOTASK.md` on Windows only.
+folder, the project's tools folder, and each repository's and place's name with its folder on this
+PC. `AUTOTASK-windows.md` is added after `AUTOTASK.md` on Windows only.
 
-Where `AUTOTASK.md` or the brief writes `{name}`, it is filled in with this machine's value, with
-forward slashes: `{tools}` the app's tools folder (`{tools}/tracker.py`), `{bundle}` the bundle's
-folder (`{bundle}/tools/look.ps1`) - for a project read from its tracker, the folder its tools
-were fetched into - `{python}` the Python the app runs on (quoted if its path holds
-a space), and each repository and place by its name (`{quill}/tools/patchtest`,
-`{press}`). A `{word}` that is none of those is left as it is, so code in a brief comes
-through whole; a brief can name only what its bundle lists, and a loop that does not place one
-is refused on start. The tracker's own description is not filled in.
+Where `AUTOTASK.md` or the definition's description writes `{name}`, it is filled in with this
+machine's value, with forward slashes: `{tools}` the app's tools folder (`{tools}/tracker.py`),
+`{bundle}` the folder the project's tools were fetched into (`{bundle}/tools/look.ps1`), `{python}`
+the Python the app runs on (quoted if its path holds a space), and each repository and place by its
+name (`{quill}/tools/patchtest`, `{press}`). A `{word}` that is none of those is left as it is, so
+code in a description comes through whole; a description can name only what its definition lists,
+and a loop that does not place one is refused on start.
 
 ## Examples
 
-Two made-up projects, in the shapes the script's `.psd1` files take; `config` tests that they
-load.
+Made-up projects, loaded by the tests.
 
-- [`examples/quill/project.json`](examples/quill/project.json) - a tracker on a server.
-- [`examples/orchard/project.json`](examples/orchard/project.json) - three repositories, and the
-  systems it runs on.
-- [`examples/settings.json`](examples/settings.json) - two workers, a loop for each, and a changed
-  default.
-
-## Importing a `.psd1`
-
-`agentloop import-psd1 <file>` makes a bundle, a worker and a loop from one of the script's
-`projects/<name>.psd1` files. It reads only what those files use: hashtables, arrays, strings,
-numbers, `$true`, `$false`, `$null` and comments. Anything else is refused, and the message names
-the line.
-
-- **The bundle** goes in `<config>/bundles/<name>`, or in `<folder>/<name>` with `--to <folder>`,
-  with `<name>.md` as `brief.md` and `<name>/` as `tools/` (less what Python leaves there,
-  `__pycache__`), and is added to `bundles`.
-- **Each repository** is named after the folder at its top (`git rev-parse --show-toplevel`),
-  lower-cased, with any other character made `-`. `studio\Loom Game` becomes `loom-game`. A
-  docs repository cloned at `Notes\shared` has that folder for its top, so it becomes `shared`;
-  the examples' `orchard-docs` is a name chosen by hand.
-- **The tracker** is the `.psd1`'s `Tracker`, its name on `Server`. A `.psd1` whose tracker is a
-  file - one with no `Server` - is refused: the tracker goes on the server first.
-- **The worker** comes from `Account` (`N` is `~/.claude-accountN`, none is `1`, `~/.claude` is
-  `null`) and from `Server` and `KeyFile`. A worker on the same Claude folder is reused, and given
-  the server if it had none. A worker on another server is made anew.
-- **The loop** is named after the project, and places each repository at the folder written in
-  the `.psd1`.
-- **What it cannot know** is left to be done by hand: the bundle's `systems` and `places`, the
-  loop's `places`, and the brief's paths written as placeholders.
-
-A bundle or loop of that name already there is refused; `--replace` replaces it.
-
-The projects `run-agent-loop.ps1` worked are read from their trackers now: each one's definition
-and tools sit beside its tracker on the server, and the repository holds no bundles of its own
-(item `drop-bundles`). AgenticLoop's `projects/` stays as it is while the script runs beside the
-app (item `switchover`).
-
-## Not settled here
-
-- Importing a zipped bundle, and the page's editing of all of the above: items `config` and
-  `ui-page`.
+- [`examples/quill.project.os`](examples/quill.project.os) - a definition: one repository, a place,
+  the one system it runs on, a setting, and a tool, [`look.py`](examples/tools/quill.project/look.py),
+  laid out beside it as the server keeps it.
+- [`examples/settings.json`](examples/settings.json) - two workers on two servers, a loop for
+  `quill` and a copy of it on the other worker that reaches quill's server itself, a loop for a
+  project with three repositories, and a changed default.

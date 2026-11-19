@@ -38,11 +38,10 @@ You start with none. Then:
 2. Add a worker: a Claude account, with the server's address. Paste the agents' key into **Paste a
    key** and **Save key**: AgentLoop checks that it signs in, keeps it in a file only you can read,
    and fills in the key file's path. A key file you made yourself works as well.
-3. Add a loop. Given a tracker's address, on **Loops** use **Add from a tracker**, or run
-   `agentloop add <address>`: it shows what the project names and asks where each of its
+3. Add a loop from the tracker's address: on **Loops** use **Add from a tracker**, or run
+   `agentloop add <address>`. It shows what the project names and asks where each of its
    repositories is cloned on this PC. `agentloop add --key-stdin` takes the agents' key on standard
-   input, unseen on a terminal, and keeps it as **Paste a key** does. Given a bundle, first add its folder on **This machine**,
-   then **Add from a bundle**.
+   input, unseen on a terminal, and keeps it as **Paste a key** does.
 4. Start it.
 
 The README's "Being handed a project" says each step in full. `agentloop run <loop> --dry` checks a

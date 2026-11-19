@@ -72,7 +72,7 @@ def _parser() -> argparse.ArgumentParser:
     default = acc_sub.add_parser("default", help="the worker a new loop starts with")
     default.add_argument("worker")
     review = sub.add_parser("review", help="what a loop run did and cost and where it stumbled, as review-run.py prints it")
-    review.add_argument("project", help="the project, by its bundle's name")
+    review.add_argument("project", help="the project, by its name: its tracker's, without .os")
     review.add_argument("run", nargs="?", help="the run, by when it started (20261008-213004); the latest when left out")
     review.add_argument("--all", action="store_true", help="every run in the logs")
     review.add_argument("--loop", help="the loop whose repositories and worker find the tracker; the project's first when left out")
@@ -86,17 +86,19 @@ def _parser() -> argparse.ArgumentParser:
     new.add_argument("--name", help="the loop's name; the project's when left out")
     new.add_argument("--repo", action="append", metavar="NAME=PATH", help="where a repository the project names is; asked for when left out")
     new.add_argument("--place", action="append", metavar="NAME=PATH", help="where a place the project names is; asked for when left out")
-    ret = sub.add_parser("retarget", help="move a loop from its bundle to its tracker, keeping this machine's paths")
+    # retarget, export-definition and import-psd1 are the bundles' way, which goes with item
+    # drop-bundle-source: they still work, but given no help, the command list does not name them.
+    ret = sub.add_parser("retarget")
     ret.add_argument("loop", help="the loop's name, in the settings")
     ret.add_argument("address", nargs="?",
                      help="Overseer's address of the tracker, or its name there; the bundle's tracker.server when left out")
-    exp = sub.add_parser("export-definition", help="write a bundle out as its definition document and tools, to put beside its tracker")
+    exp = sub.add_parser("export-definition")
     exp.add_argument("bundle", type=Path, help="the bundle's folder, with project.json, brief.md and tools/")
     exp.add_argument("--out", type=Path, required=True, help="an empty folder, laid out as the tracker's folder on the server")
     exp.add_argument("--tracker-description", type=Path, metavar="FILE",
                      help="a file holding the tracker's own description; read from the tracker through the worker's server when left out")
     exp.add_argument("--worker", help="the worker whose server and key read the tracker's description; the default worker when left out")
-    imp = sub.add_parser("import-psd1", help="make a bundle, a worker and a loop from one of run-agent-loop.ps1's projects/<name>.psd1")
+    imp = sub.add_parser("import-psd1")
     imp.add_argument("file", type=Path, help="the .psd1, with its brief <name>.md and tools folder <name>/ beside it")
     imp.add_argument("--replace", action="store_true", help="replace a bundle or loop of the same name")
     imp.add_argument("--to", type=Path, help="the folder the bundle is made in, as <to>/<name>; the settings' bundles folder when left out")

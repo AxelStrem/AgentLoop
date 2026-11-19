@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "name": "quill",
+  "tracker": {"server": "alice/projects/quill.os"},
+  "repos": ["quill"],
+  "places": ["press"],
+  "systems": ["windows"],
+  "settings": {}
+}

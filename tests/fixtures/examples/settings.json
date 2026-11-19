@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "bundles": [
+    "~/src/bundles/quill",
+    "~/AppData/Roaming/agentloop/bundles/orchard"
+  ],
+  "workers": [
+    {
+      "name": "account1",
+      "claude": "~/.claude-account1",
+      "overseer": {
+        "server": "https://overseer.example.com",
+        "keyFile": "~/.overseer/agents.key"
+      }
+    },
+    {
+      "name": "account2",
+      "claude": "~/.claude-account2",
+      "overseer": {
+        "server": "https://overseer.example.org",
+        "keyFile": "~/.overseer/other-agents.key"
+      }
+    }
+  ],
+  "loops": [
+    {
+      "name": "quill",
+      "project": "quill",
+      "worker": "account1",
+      "repos": {"quill": "~/src/Quill"},
+      "places": {"press": "C:/Program Files/Press"},
+      "settings": {"maxIterations": 5}
+    },
+    {
+      "name": "orchard",
+      "project": "orchard",
+      "worker": "account2",
+      "repos": {
+        "orchard": "~/src/Orchard",
+        "orchard-server": "~/src/Orchard-Server",
+        "orchard-docs": "~/src/Orchard-Docs/shared"
+      },
+      "settings": {}
+    }
+  ],
+  "defaults": {"stopAtWeeklyUse": 0.9},
+  "install": null,
+  "server": {"host": "127.0.0.1", "port": 8765}
+}

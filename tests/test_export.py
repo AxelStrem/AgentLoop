@@ -209,3 +209,32 @@ def test_the_command_without_a_description_or_a_server_is_refused(tmp_path, monk
     assert code == 2
     assert "--tracker-description" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()
+
+
+DOCS_EXAMPLES = Path(__file__).resolve().parents[1] / "docs" / "examples"
+
+
+def test_the_docs_example_definition_reads(overseer, tmp_path):
+    """docs/examples/quill.project.os is a definition the server hands out, and its tool is the
+    file beside it, so the example in the docs stays one that works."""
+    folder = overseer.folder()
+    text = tracker_text(item("alpha")).replace(
+        'project (label="Proj") {\n', 'project (label="Proj") {\n    - definition (source="quill.project.os/definition", lazy=false)\n', 1)
+    tracker = overseer.document(text, project="quill", folder=folder)
+    (overseer.root / folder / "quill.project.os").write_bytes((DOCS_EXAMPLES / "quill.project.os").read_bytes())
+    tool = (DOCS_EXAMPLES / "tools" / "quill.project" / "look.py").read_bytes()
+    put(overseer, tracker, "look.py", tool)
+
+    got = definition.project(tracker, definition.fetch(overseer.url, overseer.key, tracker))
+    assert got.name == "quill" and got.repo_names() == ["quill"] and got.places == ["press"]
+    assert got.systems == ["windows"] and got.settings == {"maxIterations": 10}
+    raw = definition.fetch(overseer.url, overseer.key, tracker)
+    definition.place_tools(raw, tmp_path, definition.file_getter(overseer.url, overseer.key, tracker))
+    assert (tmp_path / "tools" / "look.py").read_bytes() == tool
+
+
+def test_the_docs_example_settings_load():
+    settings = config.load_settings(DOCS_EXAMPLES / "settings.json")
+    assert [l.tracker for l in settings.loops] == ["alice/projects/quill.os", "alice/projects/quill.os", "bob/orchard.os"]
+    assert settings.loop("quill-2").places == {"press": "C:/Program Files/Press"}
+    assert not settings.bundles
