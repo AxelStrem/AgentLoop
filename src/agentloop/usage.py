@@ -16,6 +16,10 @@ Differences from the script, each deliberate:
   script would print an empty list.
 - A probe that has not answered in `PROBE_TIMEOUT` seconds counts as not back, where the script waits
   for claude as long as it takes.
+- A worker on an API key (item claude-container) has no five-hour or weekly window: it is billed per
+  use. Its session counts as stopped by a limit only when a rate report refuses it, never because
+  the error's text says "limit" - an API rate limit or a spent balance is a failed session, not an
+  hour of waiting - and its usage line says it is billed per use.
 - The probe's command line is a list, never a shell string. Nothing here was tried on macOS or
   Linux: this machine is Windows.
 """
@@ -80,12 +84,15 @@ def blocked(rate: dict | None) -> bool:
     return bool(rate) and rate.get("status") not in _ALLOWED
 
 
-def limited(result: SessionResult) -> bool:
+def limited(result: SessionResult, per_use: bool = False) -> bool:
     """Whether the session was stopped by the five-hour or the weekly limit: it ended without a
     result or with an error, and either the last rate report refused it or the error speaks of a
-    limit (`Invoke-Phase`)."""
+    limit (`Invoke-Phase`). `per_use` is an API key's account, which has neither limit: only a rate
+    report refusing it counts then."""
     final = result.final
     stopped = not final or bool(final.get("is_error"))
+    if per_use:
+        return stopped and blocked(result.rate)
     text = str((final or {}).get("result") or "")
     return stopped and (blocked(result.rate) or re.search("limit", text, re.I) is not None)
 
@@ -233,6 +240,11 @@ def usage_line(rate: dict | None, account: str) -> str | None:
             resets = f", resets {local(at):%a %H:%M}"
         parts.append(f"{name} {round(float(w.get('utilization') or 0) * 100)}% used{resets}")
     return f"Usage on {account}: {'; '.join(parts)}" if parts else None
+
+
+def per_use_line(account: str) -> str:
+    """The usage line of a worker on an API key, which has no allowance to show."""
+    return f"Usage on {account}: billed per use (API key), no 5-hour or weekly limit"
 
 
 def week_used(rate: dict | None, stop_at: float) -> str | None:

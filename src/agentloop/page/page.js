@@ -1253,6 +1253,8 @@ async function renderMachine() {
 // A worker's last usage, and when it was reported, so that an old line can be told from a new one.
 function usageText(usage) {
   if (!usage || !usage.line) return "";
+  // An API key's line is said without a report: it has no allowance to report.
+  if (!usage.at) return usage.line;
   const at = new Date(usage.at * 1000);
   const today = at.toDateString() === new Date().toDateString();
   const when = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1290,6 +1292,7 @@ function drawWorkers() {
           h("button", { type: "button", class: "small", onclick: () => setDefault(worker.name) }, "Make it the default"),
           " ", h("button", { type: "button", class: "small", onclick: () => editWorker(worker.name) }, "Edit"))),
       h("div", { class: "mono", text: worker.claude || "the default account (~/.claude)" }),
+      said && said.signIn ? h("div", { class: "sub", text: said.signIn }) : null,
       h("div", {}, h("span", { class: said && said.login.state === "in" ? "" : "problem", text: login })),
       said && said.login.state !== "in" && said.loginCommand ? h("pre", { class: "mono", text: said.loginCommand }) : null,
       h("div", { class: "usage c-darkcyan mono", "data-worker": worker.name, text: usageText(said && said.usage) }),
@@ -1390,6 +1393,16 @@ function editWorker(name) {
   const server = h("input", { value: (worker.overseer || {}).server || "", placeholder: "https://..." });
   const keyFile = h("input", { value: (worker.overseer || {}).keyFile || "", placeholder: "~/.overseer/agent.key" });
   const manager = h("input", { value: worker.manager || "", placeholder: "empty for none" });
+  // How it signs in to Claude: the folder's login, or a token or key from an environment variable
+  // named here - the variable, never the secret.
+  const signKind = worker.signIn ? Object.keys(worker.signIn)[0] : "";
+  const signIn = h("select", {},
+    h("option", { value: "", text: "the login in its Claude folder" }),
+    h("option", { value: "token", text: "a token (claude setup-token)" }),
+    h("option", { value: "apiKey", text: "an API key, billed per use" }));
+  signIn.value = signKind;
+  const signVariable = h("input", { class: "mono", value: signKind ? worker.signIn[signKind] : "",
+    placeholder: "CLAUDE_CODE_OAUTH_TOKEN" });
   root.append(
     field("Claude folder", "The account's config folder, CLAUDE_CONFIG_DIR; empty for the default account.", claude, "claude"),
     field("a server", "The Overseer server the trackers are on, and the key its loops sign with.", h("label", { class: "group" }, hasServer, "this worker has one"), "overseer"),
@@ -1397,7 +1410,9 @@ function editWorker(name) {
     field("key file", "Where the agents' key is kept: a path only, never the key.", keyFile, "keyFile"),
     field("paste a key", "Or paste the key itself: it is checked with the server, kept in a file only you can read, and its path goes above.",
       pasteKey(keyFile, () => ({ server: server.value.trim() })), "key"),
-    field("manager", "The Overseer username whose items this worker's loops take first; empty for none.", manager, "manager"));
+    field("manager", "The Overseer username whose items this worker's loops take first; empty for none.", manager, "manager"),
+    field("signs in with", "How its sessions sign in to Claude. A token or key is read from an environment variable where agentloop runs, as in a container.", signIn, "signIn"),
+    field("variable", "The name of the environment variable holding the token or key: never the secret itself.", signVariable, "signIn"));
   const body = { el: root, mark: (f) => markInputs(root, f) };
   openEditor(`The worker ${name}`, body, async () => {
     await saveSettings((raw) => {
@@ -1405,6 +1420,8 @@ function editWorker(name) {
       w.claude = claude.value.trim() || null;
       w.overseer = hasServer.checked ? { server: server.value.trim(), keyFile: keyFile.value.trim() } : null;
       w.manager = manager.value.trim() || null;
+      if (signIn.value) w.signIn = { [signIn.value]: signVariable.value.trim() };
+      else delete w.signIn;
     });
     await loadAccounts(true);
     drawWorkers();

@@ -22,8 +22,10 @@ Recorded always: CLAUDE_CONFIG_DIR, OVERSEER_TRACKER, OVERSEER_ITEM and every AG
 folder in CLAUDE_CONFIG_DIR holds a file named `fake-login` (its text, if any, the plan), logged out
 otherwise, exit 1 then; and it writes `.claude.json` into the folder, as the real one does. With no
 CLAUDE_CONFIG_DIR it writes nothing - the default account's folder is in the home folder - and is
-logged in when FAKE_CLAUDE_DEFAULT_LOGIN is set. FAKE_CLAUDE_AUTH set to `hang` makes it wait a
-minute, and to `garbage` print what is not JSON.
+logged in when FAKE_CLAUDE_DEFAULT_LOGIN is set. CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY set
+logs it in whatever the folder holds, with the method `oauth_token` or `api_key`; their values are
+never recorded or printed. FAKE_CLAUDE_AUTH set to `hang` makes it wait a minute, and to `garbage`
+print what is not JSON.
 
 A session file holds one event per line. A line with a "fake" key is not played but done:
   {"fake": "write", "path": "notes.txt", "text": "..."}  writes a file, relative to the cwd
@@ -207,8 +209,13 @@ def auth_status() -> int:
     else:
         logged = bool(os.environ.get("FAKE_CLAUDE_DEFAULT_LOGIN"))
         plan = "pro"
-    said = {"loggedIn": logged, "authMethod": "claude.ai" if logged else "none", "apiProvider": "firstParty"}
-    if logged:
+    method = "claude.ai" if logged else "none"
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        logged, method, plan = True, "oauth_token", plan or "max"
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        logged, method = True, "api_key"
+    said = {"loggedIn": logged, "authMethod": method, "apiProvider": "firstParty"}
+    if logged and method != "api_key":
         said.update({"email": "someone@example.com", "orgName": "Someone's Organization", "subscriptionType": plan or "max"})
     print(json.dumps(said, indent=2))
     return 0 if logged else 1

@@ -100,6 +100,33 @@ def test_variables(tmp_path, monkeypatch):
     assert "OVERSEER_URL" not in plain and "OVERSEER_KEY_FILE" not in plain and "OVERSEER_CACHE" not in plain
 
 
+def test_a_workers_token_or_key_reaches_the_session(tmp_path):
+    environ = {"TOKEN_ONE": "tok-1", "KEY_TWO": "key-2"}
+    token = session.session_variables(author="a", scratch=tmp_path, tracker="t", item="p:x",
+                                      sign_in={"token": "TOKEN_ONE"}, environ=environ)
+    assert token["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-1"
+    # The other way in is taken away, so that one worker never runs on both.
+    assert "ANTHROPIC_API_KEY" in token and token["ANTHROPIC_API_KEY"] is None
+    key = session.session_variables(author="a", scratch=tmp_path, tracker="t", item="p:x",
+                                    sign_in={"apiKey": "KEY_TWO"}, environ=environ)
+    assert key["ANTHROPIC_API_KEY"] == "key-2" and key["CLAUDE_CODE_OAUTH_TOKEN"] is None
+    env = session.build_env(token, {"ANTHROPIC_API_KEY": "inherited", "PATH": "p"})
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-1" and "ANTHROPIC_API_KEY" not in env
+
+    # A worker with none leaves what the app was started with, as a container sets it for all.
+    plain = session.session_variables(author="a", scratch=tmp_path, tracker="t", item="p:x")
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in plain and "ANTHROPIC_API_KEY" not in plain
+    assert session.build_env(plain, {"CLAUDE_CODE_OAUTH_TOKEN": "inherited"})["CLAUDE_CODE_OAUTH_TOKEN"] == "inherited"
+
+
+def test_a_token_not_set_is_named_and_never_shown(tmp_path):
+    with pytest.raises(session.SessionError) as error:
+        session.sign_in_variables({"token": "TOKEN_ONE"}, {"TOKEN_ONE": ""})
+    assert "TOKEN_ONE is not set" in str(error.value)
+    with pytest.raises(session.SessionError):
+        session.sign_in_variables({"apiKey": "KEY"}, {})
+
+
 def test_powershell_tool_only_on_windows(tmp_path, monkeypatch):
     monkeypatch.setattr(session.os, "name", "posix")
     assert "CLAUDE_CODE_USE_POWERSHELL_TOOL" not in session.session_variables(author="a", scratch=tmp_path, tracker="t", item="p:x")

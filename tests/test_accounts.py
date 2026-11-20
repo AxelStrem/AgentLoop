@@ -214,6 +214,56 @@ def test_last_usage_round_trip(home):
     assert accounts.last_usage("one") is None
 
 
+# A token or a key (item claude-container)
+
+def test_status_with_a_token_needs_no_folder_and_shows_no_secret(home, fake_claude, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_ENV", "CLAUDE_CODE_OAUTH_TOKEN,ANTHROPIC_API_KEY")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "inherited-key")
+    login = accounts.status(claude_exe(), None, sign_in={"token": "MY_TOKEN"}, environ={"MY_TOKEN": "tok-secret"})
+    assert (login.state, login.method) == ("in", "oauth_token")
+    assert "tok-secret" not in login.line()
+    env = fake_claude.calls()[-1]["env"]
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-secret" and env["ANTHROPIC_API_KEY"] is None
+    key = accounts.status(claude_exe(), None, sign_in={"apiKey": "MY_KEY"}, environ={"MY_KEY": "k"})
+    assert (key.state, key.method) == ("in", "api_key")
+
+
+def test_status_with_a_variable_not_set_asks_no_claude(home, fake_claude):
+    login = accounts.status(claude_exe(), None, sign_in={"token": "MY_TOKEN"}, environ={})
+    assert login.line() == "not signed in: MY_TOKEN is not set"
+    assert fake_claude.calls() == []
+
+
+def test_the_sign_in_line_names_the_variable_never_the_secret(home):
+    assert accounts.sign_in_line(None, {"token": "T"}, {"T": "secret"}) == "signs in with a token from T"
+    assert accounts.sign_in_line(None, {"token": "T"}, {}) == "signs in with a token from T - T is not set"
+    assert accounts.sign_in_line(None, {"apiKey": "K"}, {"K": "s"}) == "signs in with an API key, billed per use, from K"
+    assert accounts.sign_in_line(None, None, {"CLAUDE_CODE_OAUTH_TOKEN": "s"}) == \
+        "signs in with a token from CLAUDE_CODE_OAUTH_TOKEN, as the app was started"
+    said = accounts.sign_in_line("~/.claude-account1", None, {})
+    assert said.startswith("signs in by the login in ") and said.endswith("/.claude-account1")
+    assert "setup-token" in accounts.sign_in_hint({"token": "T"}) and "T" in accounts.sign_in_hint({"token": "T"})
+
+
+def test_login_run_makes_the_folder_and_runs_claude_here(home, monkeypatch):
+    ran = []
+
+    def run(argv, env):
+        ran.append((argv, env))
+        return accounts.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(accounts.subprocess, "run", run)
+    assert accounts.run_login("claude", "~/.claude-account3", None) == 0
+    argv, env = ran[-1]
+    assert argv == ["claude", "auth", "login"]
+    assert (home / ".claude-account3").is_dir()
+    assert Path(env["CLAUDE_CONFIG_DIR"]) == (home / ".claude-account3").resolve()
+    assert accounts.run_login("claude", None, {"token": "T"}) == 0
+    assert ran[-1][0] == ["claude", "setup-token"]
+    with pytest.raises(accounts.session.SessionError):
+        accounts.run_login("claude", None, {"apiKey": "K"})
+
+
 # The command
 
 def test_the_accounts_command(home, fake_claude, capsys):
@@ -226,9 +276,10 @@ def test_the_accounts_command(home, fake_claude, capsys):
     assert cli.main(["accounts"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[0].startswith("* account1 ") and out[0].endswith("logged in (claude.ai, max)")
-    assert out[1].startswith("  five ") and out[1].endswith("no such folder: not logged in")
-    assert "log in with:" in out[2] and "claude auth login" in out[2]
-    assert out[3].startswith("  account2 ") and out[3].endswith("agentloop accounts add ~/.claude-account2")
+    assert "signs in by the login in " in out[1]
+    assert out[2].startswith("  five ") and out[2].endswith("no such folder: not logged in")
+    assert "log in with:" in out[4] and "claude auth login" in out[4]
+    assert out[5].startswith("  account2 ") and out[5].endswith("agentloop accounts add ~/.claude-account2")
     assert cli.main(["accounts", "default", "five"]) == 0
     assert cli.main(["accounts", "login", "five"]) == 0
     assert capsys.readouterr().out.strip().endswith("claude auth login")

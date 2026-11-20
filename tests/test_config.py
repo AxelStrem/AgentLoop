@@ -78,6 +78,10 @@ def test_an_overseer_library_from_older_settings_is_let_be(tmp_path):
     (lambda s: s["workers"][0].update(manager="Ap 31"), "workers[0].manager: null, or an Overseer username"),
     (lambda s: s["workers"][0].update(manager=7), "workers[0].manager: null, or an Overseer username"),
     (lambda s: s["workers"][0].update(manager=""), "workers[0].manager: null, or an Overseer username"),
+    (lambda s: s["workers"][0].update(signIn={"token": "sk-ant-oat01-xyz"}), "workers[0].signIn: null for the folder's login"),
+    (lambda s: s["workers"][0].update(signIn={"password": "X"}), "workers[0].signIn: null for the folder's login"),
+    (lambda s: s["workers"][0].update(signIn={"token": "A", "apiKey": "B"}), "workers[0].signIn: null for the folder's login"),
+    (lambda s: s["workers"][0].update(signIn="TOKEN"), "workers[0].signIn: null for the folder's login"),
 ])
 def test_wrong_settings_are_said_plainly(tmp_path, change, says):
     raw = _example_settings()
@@ -147,6 +151,18 @@ def test_save_keeps_unknown_keys_and_order(tmp_path):
     assert list(again) == list(raw)
     assert again["laterKey"] == {"kept": True}
     assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
+
+
+def test_a_workers_sign_in_loads(tmp_path):
+    raw = _example_settings()
+    raw["workers"][0]["signIn"] = {"token": "CLAUDE_TOKEN_ONE"}
+    raw["workers"][1]["signIn"] = {"apiKey": "MY_KEY"}
+    one, two = config.load_settings(_write(tmp_path / "a.json", raw)).workers
+    assert (one.sign_in_kind, one.sign_in_variable) == ("token", "CLAUDE_TOKEN_ONE")
+    assert (two.sign_in_kind, two.sign_in_variable) == ("apiKey", "MY_KEY")
+    del raw["workers"][0]["signIn"]
+    raw["workers"][1]["signIn"] = None
+    assert [w.sign_in_kind for w in config.load_settings(_write(tmp_path / "b.json", raw)).workers] == [None, None]
 
 
 def test_a_workers_manager_loads_and_is_saved(tmp_path):

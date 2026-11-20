@@ -214,6 +214,7 @@ folder on the server, as `tracker.py projects` lists them.
 | `claude` | the Claude config folder (`~/.claude-account2`), or `null` for the default account | `Account` |
 | `overseer` | `{"server": "https://...", "keyFile": "~/.overseer/agents.key"}`, or `null` | `Server`, `KeyFile` |
 | `manager` | an Overseer username (lower case letters, digits, `-`, `_`), or absent or `null`: the loops of this worker take the items whose `owner` it is first, before those flagged `first` | |
+| `signIn` | absent or `null` for the login in its `claude` folder; `{"token": VARIABLE}` for a token made by `claude setup-token`, or `{"apiKey": VARIABLE}` for an API key, billed per use. `VARIABLE` names the environment variable that holds it where agentloop runs. It is never the secret itself | |
 
 `claude: null` means no `CLAUDE_CONFIG_DIR` in the session's environment at all, not one naming
 `~/.claude`: given one, `claude` keeps its state inside it and starts as if new (the script's
@@ -236,6 +237,19 @@ Overseer is needed on the machine.
   instead, except on macOS. The email and organisation it also says are never kept or shown.
 - **Logging in** is a person's: the command is `claude auth login` with `CLAUDE_CONFIG_DIR` set to
   the folder (removed for the default account), written for PowerShell on Windows and sh elsewhere.
+- **A token or an API key** (item `claude-container`, for a container): the worker's `signIn`
+  names the variable that holds it. Each session gets it as `CLAUDE_CODE_OAUTH_TOKEN` or
+  `ANTHROPIC_API_KEY`, read when the session starts, and the other of the two is removed. A worker
+  with no `signIn` leaves both as the app was started with them. A variable that is not set
+  refuses the loop's start, naming the variable. Its login is asked of `claude auth status` with
+  the variable set, and no folder is needed. The secret is never written to the settings, a log,
+  the page or a resume command. A worker on an API key has no five-hour or weekly limit. Its
+  session counts as limited only when a rate report refuses it, never by the words of an error, so
+  an API rate limit is a failed session and not a wait. Its usage line says it is billed per use.
+- **Logging in inside a container:** `agentloop accounts login <worker> --run` runs the login in
+  the terminal it is given (`docker exec -it`). It makes the worker's folder first, and runs
+  `claude setup-token` for a token worker. claude prints an address to open on any machine and
+  reads the code back.
 - **Two loops on one account** share its usage: two workers on the same Claude folder are one
   account, whatever their `overseer`.
 - **The last usage** a worker's sessions reported - the stream's `rate_limit_info`, and when - is

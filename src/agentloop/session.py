@@ -221,11 +221,14 @@ def session_variables(
     item: str,
     claude: str | None = None,
     overseer: dict | None = None,
+    sign_in: dict | None = None,
+    environ: dict[str, str] | None = None,
 ) -> dict[str, str | None]:
     """The variables a session runs with, as the script's `$SessionEnv`; None removes one.
 
     `tracker` is what OVERSEER_TRACKER names - the tracker's document name on the server - and
     `item` is `<project>:<handle>`. `overseer` is the worker's: the server, and its key file.
+    `sign_in` is the worker's too (`sign_in_variables`), read from `environ`, the app's own.
     The template a tracker inherits comes from that server too, so nothing of the machine's
     Overseer is passed on."""
     env: dict[str, str | None] = {
@@ -251,7 +254,27 @@ def session_variables(
     if os.name == "nt":
         # The native Windows PowerShell tool, as the script asks for it.
         env["CLAUDE_CODE_USE_POWERSHELL_TOOL"] = "1"
+    env.update(sign_in_variables(sign_in, environ))
     return env
+
+
+def sign_in_variables(sign_in: dict | None, environ: dict[str, str] | None = None) -> dict[str, str | None]:
+    """The variables a worker's `signIn` gives its sessions (item claude-container): the secret, read
+    from the variable it names in the app's environment, as the variable claude reads it from, and
+    the other of the two removed, so that one worker never runs on both. A worker with none leaves
+    both as the app has them: a container that sets one for every worker keeps it.
+
+    A variable named but not set is a SessionError naming the variable, never a value."""
+    if not sign_in:
+        return {}
+    kind, variable = next(iter(sign_in.items()))
+    value = (os.environ if environ is None else environ).get(variable)
+    if not value:
+        raise SessionError(f"{variable} is not set: the worker signs in to Claude with the {_SIGN_IN_WHAT[kind]} it holds.")
+    return {name: value if k == kind else None for k, name in config.SIGN_IN.items()}
+
+
+_SIGN_IN_WHAT = {"token": "token (claude setup-token)", "apiKey": "API key"}
 
 
 def build_env(variables: dict[str, str | None], base: dict[str, str] | None = None) -> dict[str, str]:

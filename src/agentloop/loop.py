@@ -446,6 +446,12 @@ class Run:
             raise LoopError(f'No worker named "{worker_name}" in the settings.')
         self.worker = found
         self.project = loop.project
+        # A token or key the worker names that is not set is refused at the start, not by the
+        # first session after a triage's worth of waiting (item claude-container).
+        try:
+            session.sign_in_variables(found.sign_in)
+        except session.SessionError as error:
+            raise LoopError(str(error)) from None
 
         # The tracker is a document on an Overseer server, named as it is there, reached at the
         # server the loop names, else its worker (item loop-from-url), with the key of the account
@@ -889,7 +895,7 @@ class Run:
             if final:
                 self.out("")
                 self.say(f"  [{final.get('subtype')}: {r.turns} turns, {figure(round(r.ms / 60000, 1))} min, ${figure(round(share, 2))}]", "DarkGray")
-            if not usage.limited(r):
+            if not usage.limited(r, per_use=self.worker.sign_in_kind == "apiKey"):
                 return final
 
             told = []
@@ -962,7 +968,7 @@ class Run:
         self.variables = session.session_variables(
             author=signature(route["model"], route), scratch=self.scratch, tracker=self.tracker,
             item=f"{Path(self.tracker).stem}:{item['handle']}", claude=self.worker.claude,
-            overseer=self.overseer,
+            overseer=self.overseer, sign_in=self.worker.sign_in,
         )
         try:
             final = self.run_phase(prompt_kind, item, route, session_id, resume, from_)
@@ -1170,7 +1176,10 @@ class Run:
         return nxt
 
     def usage_line(self) -> None:
-        line = usage.usage_line(self.last_rate, usage.account_name(self.variables.get("CLAUDE_CONFIG_DIR")))
+        account = usage.account_name(self.variables.get("CLAUDE_CONFIG_DIR"))
+        line = usage.usage_line(self.last_rate, account)
+        if not line and self.worker.sign_in_kind == "apiKey":
+            line = usage.per_use_line(account)
         if line:
             self.say("  " + line, "DarkCyan")
 
@@ -1622,7 +1631,7 @@ class Run:
         self.variables = session.session_variables(
             author=signature(plan.route["model"], plan.route), scratch=self.scratch, tracker=self.tracker,
             item=f"{Path(self.tracker).stem}:{item['handle']}", claude=self.worker.claude,
-            overseer=self.overseer,
+            overseer=self.overseer, sign_in=self.worker.sign_in,
         )
         prompt_file = dry / "prompt.md"
         prompt_file.write_bytes(self.prompt(plan.kind, item, None).encode("utf-8"))

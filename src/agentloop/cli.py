@@ -69,8 +69,10 @@ def _parser() -> argparse.ArgumentParser:
     add = acc_sub.add_parser("add", help="add a worker on a Claude config folder")
     add.add_argument("folder", help="the config folder, or default for the default account (~/.claude)")
     add.add_argument("--name", help="the worker's name; the one list suggests when left out")
-    login = acc_sub.add_parser("login", help="print the command that logs a worker's account in, for this OS's shell")
+    login = acc_sub.add_parser("login", help="print the command that logs a worker's account in, for this OS's shell, or run it")
     login.add_argument("worker")
+    login.add_argument("--run", action="store_true",
+                       help="run it in this terminal (docker exec -it): claude prints an address to open on any machine and reads the code back")
     default = acc_sub.add_parser("default", help="the worker a new loop starts with")
     default.add_argument("worker")
     review = sub.add_parser("review", help="what a loop run did and cost and where it stumbled, as review-run.py prints it")
@@ -184,7 +186,9 @@ def _accounts(args: argparse.Namespace) -> int:
             worker = settings.worker(args.worker)
             if worker is None:
                 raise config.ConfigError(settings.path.name, "workers", f'no worker named "{args.worker}"')
-            print(accounts.login_command(worker.claude))
+            if args.run:
+                return accounts.run_login(session.find_claude(settings.claude), worker.claude, worker.sign_in)
+            print(accounts.sign_in_hint(worker.sign_in) if worker.sign_in else accounts.login_command(worker.claude))
             return 0
         if args.action == "default":
             accounts.set_default(args.worker)
@@ -193,10 +197,12 @@ def _accounts(args: argparse.Namespace) -> int:
         default = settings.default_worker
         for worker in settings.workers:
             mark = "*" if default and worker.name == default.name else " "
-            login = accounts.status(claude, worker.claude)
+            login = accounts.status(claude, worker.claude, sign_in=worker.sign_in)
             print(f"{mark} {worker.name:<16} {worker.claude or '(default account)':<28} {login.line()}")
+            print(f"  {'':<16} {accounts.sign_in_line(worker.claude, worker.sign_in)}")
             if login.state != "in":
-                print(f"  {'':<16} log in with: {accounts.login_command(worker.claude)}")
+                how = accounts.sign_in_hint(worker.sign_in) if worker.sign_in else accounts.login_command(worker.claude)
+                print(f"  {'':<16} log in with: {how}")
         for f in accounts.found(settings.workers):
             print(f"  {f.name:<16} {f.claude or '(default account)':<28} not added: agentloop accounts add {f.claude or 'default'}")
         return 0

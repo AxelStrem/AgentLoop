@@ -733,6 +733,46 @@ def test_a_worker_without_a_server_is_refused(project, fake_claude):
         p.go()
 
 
+def _sign_in(sign_in: dict) -> None:
+    settings_file = config.paths().settings
+    raw = json.loads(settings_file.read_text(encoding="utf-8"))
+    raw["workers"][0]["signIn"] = sign_in
+    config.save_json(settings_file, raw)
+
+
+def test_a_workers_token_reaches_its_sessions_and_nowhere_else(project, fake_claude, monkeypatch):
+    p = project(item("alpha", "ready", complexity="low"))
+    _sign_in({"token": "AGENTLOOP_TEST_TOKEN"})
+    monkeypatch.setenv("AGENTLOOP_TEST_TOKEN", "tok-very-secret")
+    monkeypatch.setenv("FAKE_CLAUDE_ENV", "CLAUDE_CODE_OAUTH_TOKEN,ANTHROPIC_API_KEY")
+    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"))
+    p.go()
+    env = p.fake.calls()[0]["env"]
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-very-secret" and env["ANTHROPIC_API_KEY"] is None
+    # Not in any file of the app's: its logs, status, prompts, system file and settings.
+    for path in config.paths().data.parent.rglob("*"):
+        if path.is_file():
+            assert b"tok-very-secret" not in path.read_bytes(), path
+
+
+def test_a_workers_token_not_set_is_refused_at_the_start(project, fake_claude, monkeypatch):
+    p = project(item("alpha"))
+    _sign_in({"token": "AGENTLOOP_TEST_TOKEN"})
+    monkeypatch.delenv("AGENTLOOP_TEST_TOKEN", raising=False)
+    with pytest.raises(loop.LoopError, match="^AGENTLOOP_TEST_TOKEN is not set"):
+        p.go()
+
+
+def test_an_api_key_workers_failed_session_is_not_waited_on(project, fake_claude, monkeypatch):
+    p = project(item("alpha", "ready", complexity="low"))
+    _sign_in({"apiKey": "AGENTLOOP_TEST_KEY"})
+    monkeypatch.setenv("AGENTLOOP_TEST_KEY", "key")
+    p.play(p.scene(result="API Error: 429 rate limit exceeded", error=True))
+    p.go()
+    assert len(p.fake.calls()) == 1
+    assert "Rate limited" not in p.text
+
+
 # A usage limit
 
 def test_a_usage_limit_is_waited_out_and_the_session_resumed(project, fake_claude):

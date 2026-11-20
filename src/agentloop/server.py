@@ -240,6 +240,8 @@ def worker_usage(worker: config.Worker) -> dict | None:
     """The worker's last usage as the page shows it: when it was reported, what, and its line."""
     last = accounts.last_usage(worker.name)
     if not last:
+        if worker.sign_in_kind == "apiKey":
+            return {"at": None, "rate": None, "line": usage.per_use_line(usage.account_name(worker.claude))}
         return None
     return {"at": last[0], "rate": last[1], "line": usage.usage_line(last[1], usage.account_name(worker.claude))}
 
@@ -823,7 +825,7 @@ class Handler(BaseHTTPRequestHandler):
         def login(worker: config.Worker) -> dict:
             if claude is None:
                 return dataclasses.asdict(accounts.Login("unknown", "claude", detail="claude was not found"))
-            return dataclasses.asdict(accounts.status(claude, worker.claude))
+            return dataclasses.asdict(accounts.status(claude, worker.claude, sign_in=worker.sign_in))
 
         # claude answers in a second or two for each account, so all are asked at once.
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(settings.workers))) as pool:
@@ -838,7 +840,9 @@ class Handler(BaseHTTPRequestHandler):
                 "manager": worker.manager,
                 "default": default is not None and worker.name == default.name,
                 "login": {**said, "line": accounts.Login(**said).line()},
-                "loginCommand": accounts.login_command(worker.claude),
+                # How it signs in, naming a secret's variable and never the secret.
+                "signIn": accounts.sign_in_line(worker.claude, worker.sign_in),
+                "loginCommand": accounts.sign_in_hint(worker.sign_in) if worker.sign_in else accounts.login_command(worker.claude),
                 "usage": worker_usage(worker),
             })
         found = [{"name": f.name, "claude": f.claude} for f in accounts.found(settings.workers)]

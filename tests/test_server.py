@@ -499,6 +499,28 @@ def test_a_bundle_read_and_changed(home, serve):
     assert c.json("GET", "/api/bundles/nope", expect=404)
 
 
+def test_the_accounts_say_how_each_signs_in_and_never_the_secret(home, serve, fake_claude, monkeypatch):
+    raw = json.loads(config.paths().settings.read_text(encoding="utf-8"))
+    raw["workers"].append({"name": "tok", "claude": None, "overseer": None, "signIn": {"token": "AGENTLOOP_TEST_TOKEN"}})
+    raw["workers"].append({"name": "key", "claude": None, "overseer": None, "signIn": {"apiKey": "AGENTLOOP_TEST_KEY"}})
+    config.save_json(config.paths().settings, raw)
+    monkeypatch.setenv("AGENTLOOP_TEST_TOKEN", "tok-very-secret")
+    monkeypatch.delenv("AGENTLOOP_TEST_KEY", raising=False)
+    c = serve()
+    said = c.json("GET", "/api/accounts")
+    assert "tok-very-secret" not in json.dumps(said)
+    w, tok, key = said["workers"]
+    assert w["signIn"].startswith("signs in by the login in ")
+    assert tok["signIn"] == "signs in with a token from AGENTLOOP_TEST_TOKEN"
+    assert tok["login"]["state"] == "in" and "setup-token" in tok["loginCommand"]
+    assert key["signIn"] == "signs in with an API key, billed per use, from AGENTLOOP_TEST_KEY - AGENTLOOP_TEST_KEY is not set"
+    assert key["login"]["line"] == "not signed in: AGENTLOOP_TEST_KEY is not set"
+    assert "billed per use" in key["usage"]["line"]
+    assert "billed per use" in c.json("GET", "/api/usage")["workers"]["key"]["line"]
+    # The page's settings carry the variable's name, which is all the settings hold.
+    assert raw["workers"][1]["signIn"] == {"token": "AGENTLOOP_TEST_TOKEN"}
+
+
 def test_the_accounts(home, serve, fake_claude):
     c = serve()
     (home / "account" / "fake-login").write_text("max", encoding="utf-8")

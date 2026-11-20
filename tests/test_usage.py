@@ -215,6 +215,18 @@ def test_usage_line_on_the_recorded_report(tmp_path, fake_claude):
     assert line.split("resets ")[1].split(";")[0][3] == " "
 
 
+def test_an_api_key_is_limited_only_by_a_refusing_report():
+    # An API rate limit or a spent balance is a failed session, not hours of waiting.
+    said = SessionResult(final={"is_error": True, "result": "API Error: 429 rate limit exceeded"})
+    assert usage.limited(said) and not usage.limited(said, per_use=True)
+    assert not usage.limited(SessionResult(final={"is_error": True, "result": "Credit balance is too low"}), per_use=True)
+    assert not usage.limited(SessionResult(), per_use=True)
+    assert usage.limited(SessionResult(rate={"status": "rejected"}), per_use=True)
+    assert usage.per_use_line(".claude-x") == "Usage on .claude-x: billed per use (API key), no 5-hour or weekly limit"
+    # With nothing reported, the weekly share never stops it.
+    assert usage.week_used(None, 0.5) is None
+
+
 def test_usage_line_nothing_reported():
     assert usage.usage_line(None, ".claude") is None
     assert usage.usage_line({"status": "allowed"}, ".claude") is None

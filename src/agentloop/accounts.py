@@ -17,6 +17,12 @@ Differences from the script, each deliberate:
 - What it says beyond the login - the email, the organisation - is never kept, logged or shown.
 - The command shown for logging in is `claude auth login`, where the script says to run claude and
   type /login.
+- A worker may sign in with a token (`claude setup-token`) or an API key, held in an environment
+  variable its `signIn` names (item claude-container), for a container where nobody runs
+  `claude auth login` at a desktop. Its status is claude's, asked with that variable set; the
+  secret is never shown, and a variable that is not set is said so with no claude call.
+- `accounts login --run` runs the login in the terminal it is given, for `docker exec -it`: claude
+  prints an address to open on any machine and takes the code back, with no browser here.
 - The last usage a worker's sessions reported is kept, so the page can show it before a loop runs;
   the script only knows it from the stream of the run it is in.
 """
@@ -142,6 +148,8 @@ class Login:
             said = " (by its .credentials.json)" if self.source == "file" else ""
             return f"logged in{f' ({how})' if how else ''}{said}"
         if self.state == "out":
+            if self.source == "variable":
+                return f"not signed in: {self.detail}"
             said = " (no .credentials.json)" if self.source == "file" else ""
             return f"not logged in{said}"
         if self.state == "no-folder":
@@ -149,14 +157,22 @@ class Login:
         return f"unknown: {self.detail}" if self.detail else "unknown"
 
 
-def status(claude_exe: str, claude: str | None, timeout: float = STATUS_TIMEOUT, macos: bool | None = None) -> Login:
+def status(claude_exe: str, claude: str | None, timeout: float = STATUS_TIMEOUT, macos: bool | None = None,
+           sign_in: dict | None = None, environ: dict[str, str] | None = None) -> Login:
     """Whether the account in `claude` (a worker's: a folder, or None for the default) is logged in,
-    asked of claude itself in the environment its sessions get."""
+    asked of claude itself in the environment its sessions get. A worker that signs in with a token
+    or a key (`sign_in`) is asked with it set, and needs no folder: claude makes one as a session
+    would."""
     macos = sys.platform == "darwin" if macos is None else macos
     folder = session.config_dir(claude)
-    if not folder.is_dir():
+    variables: dict[str, str | None] = {"CLAUDE_CONFIG_DIR": str(folder) if claude else None}
+    if sign_in:
+        try:
+            variables.update(session.sign_in_variables(sign_in, environ))
+        except session.SessionError:
+            return Login("out", "variable", detail=f"{next(iter(sign_in.values()))} is not set")
+    elif not folder.is_dir():
         return Login("no-folder", "folder")
-    variables = {"CLAUDE_CONFIG_DIR": str(folder) if claude else None}
     try:
         stdout = _run_ended(
             [claude_exe, "auth", "status", "--json"], session.build_env(variables), timeout,
@@ -167,6 +183,9 @@ def status(claude_exe: str, claude: str | None, timeout: float = STATUS_TIMEOUT,
             raise ValueError("no loggedIn")
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         # The error's type only: its text could name a path or what claude printed.
+        if sign_in:
+            # The folder's .credentials.json says nothing of a token or a key.
+            return Login("unknown", "claude", detail=f"claude auth status failed ({type(error).__name__})")
         return _by_file(folder, type(error).__name__, macos)
     if not logged:
         return Login("out", "claude")
@@ -217,6 +236,58 @@ def login_command(claude: str | None, windows: bool | None = None) -> str:
     if windows:
         return "$env:CLAUDE_CONFIG_DIR = '" + folder.replace("'", "''") + "'; claude auth login"
     return f"CLAUDE_CONFIG_DIR={shlex.quote(folder)} claude auth login"
+
+
+def sign_in_line(claude: str | None, sign_in: dict | None, environ: dict[str, str] | None = None) -> str:
+    """How a worker's sessions sign in to Claude, naming the variable a secret is in and never the
+    secret: its token or key, else one the app's environment gives every worker, else the login
+    in its folder."""
+    environ = os.environ if environ is None else environ
+    if sign_in:
+        kind, variable = next(iter(sign_in.items()))
+        unset = "" if environ.get(variable) else f" - {variable} is not set"
+        return f"signs in with {_WHAT[kind]} from {variable}{unset}"
+    inherited = [(kind, name) for kind, name in config.SIGN_IN.items() if environ.get(name)]
+    if inherited:
+        kind, name = inherited[0]
+        return f"signs in with {_WHAT[kind]} from {name}, as the app was started"
+    return f"signs in by the login in {_slashes(session.config_dir(claude))}"
+
+
+_WHAT = {"token": "a token", "apiKey": "an API key, billed per use,"}
+
+
+def _slashes(path: Path) -> str:
+    return str(path).replace("\\", "/")
+
+
+def sign_in_hint(sign_in: dict) -> str:
+    """What a person does to give a token or key worker its secret: the command that makes a token,
+    or where an API key comes from, and the variable to put it in where the app runs."""
+    kind, variable = next(iter(sign_in.items()))
+    if kind == "token":
+        return f"claude setup-token, then set {variable} to the token it prints, where agentloop runs"
+    return f"set {variable} to an API key from the Claude Console, where agentloop runs"
+
+
+def login_argv(claude_exe: str, sign_in: dict | None) -> list[str]:
+    """What `accounts login --run` runs: `claude setup-token` for a token worker, which prints the
+    token for the person to keep, else `claude auth login`."""
+    return [claude_exe, "setup-token"] if sign_in else [claude_exe, "auth", "login"]
+
+
+def run_login(claude_exe: str, claude: str | None, sign_in: dict | None) -> int:
+    """Runs the login in this terminal, with the worker's CLAUDE_CONFIG_DIR, its folder made first so
+    that a container's volume holds it. claude prints an address to open on any machine and reads
+    the code back, so no browser is needed here."""
+    if sign_in and next(iter(sign_in)) != "token":
+        raise session.SessionError("An API key is made in the Claude Console, not by claude: " + sign_in_hint(sign_in) + ".")
+    variables: dict[str, str | None] = {"CLAUDE_CONFIG_DIR": None}
+    if claude and not sign_in:
+        folder = session.config_dir(claude)
+        folder.mkdir(parents=True, exist_ok=True)
+        variables["CLAUDE_CONFIG_DIR"] = str(folder)
+    return subprocess.run(login_argv(claude_exe, sign_in), env=session.build_env(variables)).returncode
 
 
 # Adding one, and the default

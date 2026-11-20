@@ -485,6 +485,24 @@ class Worker:
     overseer: dict | None
     # The Overseer username whose items this worker's loops take first, before items flagged first.
     manager: str | None = None
+    # How its sessions sign in to Claude when not by the folder's own login (item claude-container):
+    # {"token": VAR} or {"apiKey": VAR}, VAR naming the environment variable that holds the secret.
+    # The secret itself is never in the settings.
+    sign_in: dict | None = None
+
+    @property
+    def sign_in_kind(self) -> str | None:
+        """`token`, `apiKey`, or None for the folder's login."""
+        return next(iter(self.sign_in)) if self.sign_in else None
+
+    @property
+    def sign_in_variable(self) -> str | None:
+        return next(iter(self.sign_in.values())) if self.sign_in else None
+
+
+# What a worker's `signIn` may name, and the variable claude reads each from.
+SIGN_IN = {"token": "CLAUDE_CODE_OAUTH_TOKEN", "apiKey": "ANTHROPIC_API_KEY"}
+VARIABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass
@@ -630,7 +648,15 @@ def parse_settings(raw: dict, path: Path) -> Settings:
         manager = w.get("manager")
         if manager is not None and (not isinstance(manager, str) or not NAME.match(manager)):
             raise ConfigError(where, f"{at}.manager", "null, or an Overseer username: lower case letters, digits, - and _")
-        workers.append(Worker(name, claude, overseer, manager))
+        sign_in = w.get("signIn")
+        if sign_in is not None and not (
+            isinstance(sign_in, dict) and len(sign_in) == 1 and next(iter(sign_in)) in SIGN_IN
+            and isinstance(next(iter(sign_in.values())), str) and VARIABLE.match(next(iter(sign_in.values())))
+        ):
+            raise ConfigError(where, f"{at}.signIn",
+                              "null for the folder's login, or {\"token\": VARIABLE} or {\"apiKey\": VARIABLE}: "
+                              "the name of the environment variable holding it, never the secret")
+        workers.append(Worker(name, claude, overseer, manager, sign_in))
 
     # Each loop's own keys checked first, then each copy filled in from the loop it is like, which
     # may come after it in the file.

@@ -6,9 +6,10 @@ serves Windows, macOS and Linux alike, and an install script for each kind of sy
 ## What it needs
 
 - **git**, on `PATH`.
-- **Claude Code** (`claude`), installed and logged in to each account a loop will use.
-  `agentloop accounts list` shows the accounts it finds, and `agentloop accounts login <worker>`
-  prints the command that logs one in.
+- **Claude Code** (`claude`), installed, and signed in to each account a loop will use: logged in,
+  or given a token or an API key (see [Signing in to Claude in a container](#signing-in-to-claude-in-a-container)).
+  `agentloop accounts list` shows the accounts it finds and how each worker signs in, and
+  `agentloop accounts login <worker>` prints the command that logs one in.
 
 The install script checks for both and says how to get either one that is missing. It installs
 neither.
@@ -95,6 +96,32 @@ token is the only thing that keeps others out. So:
   "loop.example.org"]`), and any other name is refused. Without a list, any name is let in. A page
   on another site that points its own name at this machine (DNS rebinding) still never has the
   cookie, so the token keeps it out.
+
+## Signing in to Claude in a container
+
+In a container nobody runs `claude auth login` at a desktop. There are three ways for a worker to
+sign in, and `agentloop accounts list` and the page's **This machine** show which one each worker
+uses. They name the variable a secret is in, and never show the secret.
+
+- **A subscription token.** Run `claude setup-token` anywhere claude is installed, signed in to the
+  account. It prints a long-lived token. Put the token in an environment variable of the container,
+  and name that variable in the worker's `signIn`: `{"token": "CLAUDE_TOKEN_MAIN"}`. Its sessions
+  get it as `CLAUDE_CODE_OAUTH_TOKEN`. Two workers naming two variables are two accounts. A
+  container that sets `CLAUDE_CODE_OAUTH_TOKEN` itself gives that token to every worker with no
+  `signIn`.
+- **Logging in inside the container.** Run `docker exec -it <container> agentloop accounts login
+  <worker> --run`. claude prints an address: open it in a browser on any machine, sign in, and
+  paste the code it shows back into the terminal. No browser is needed in the container. Give the
+  worker a `claude` folder under `/data`, such as `/data/claude/main`, so the login is kept on the
+  volume and outlasts a new image. Without `--run`, the command only prints what to run.
+- **An API key** from the Claude Console, named in the worker's `signIn` as `{"apiKey":
+  "ANTHROPIC_KEY_MAIN"}`, reaches its sessions as `ANTHROPIC_API_KEY`. **It is billed per use,
+  for every token, not from a subscription.** It has no five-hour or weekly limit, so the usage
+  line says "billed per use" and `stopAtWeeklyUse` never stops it. An API error, such as a rate
+  limit or a spent balance, ends the session as a failed one. The loop does not wait it out.
+
+A worker whose variable is not set is refused when its loop starts, and the error names the
+variable. Nothing of the token or key is written to the settings, the logs or the page.
 
 ## Upgrading
 
