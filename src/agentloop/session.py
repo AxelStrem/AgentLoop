@@ -143,11 +143,12 @@ def placeholders(bundle: Path | None, folders: dict[str, Path], places: dict[str
 
 
 def where_you_are(bundle: Path | None, folders: dict[str, Path], places: dict[str, Path],
-                  about: dict[str, str] | None = None, fetched: bool = False) -> str:
+                  about: dict[str, str] | None = None, fetched: bool = False, project_env: Path | None = None) -> str:
     """The section of system.md that tells a session the machine it is on, the same for every
     session of a run. `about` is what the project says each repository and place is, beside its
     folder where it says it. `fetched` when `bundle` is the folder a tracker's project had its
-    tools fetched into (item tools-fetch), not a bundle."""
+    tools fetched into (item tools-fetch), not a bundle. `project_env` is the folder the project's
+    setup script installed its tools in (item project-setup), when it ran."""
     values = placeholders(bundle, folders, places)
     about = about or {}
     here = config.this_system()
@@ -172,6 +173,9 @@ def where_you_are(bundle: Path | None, folders: dict[str, Path], places: dict[st
         *([f"- **The project's tools** (`bundle`): `{values['bundle']}`, its tools in `tools/`, fetched from its tracker."
            if fetched else f"- **The project's bundle** (`bundle`): `{values['bundle']}`, its own tools in `tools/`."]
           if bundle is not None else []),
+        *([f"- **The project's own tools,** installed by its setup script: `{_slashes(project_env)}`. What it put in "
+            f"front of PATH, and the variables it set, are in this session's environment already; `{_slashes(project_env)}/"
+            "session-env.txt` lists them."] if project_env is not None else []),
         "- **Repositories:**",
         *(folder(name) for name in folders),
     ]
@@ -223,6 +227,7 @@ def session_variables(
     overseer: dict | None = None,
     sign_in: dict | None = None,
     environ: dict[str, str] | None = None,
+    project_env: Any = None,
 ) -> dict[str, str | None]:
     """The variables a session runs with, as the script's `$SessionEnv`; None removes one.
 
@@ -230,7 +235,11 @@ def session_variables(
     `item` is `<project>:<handle>`. `overseer` is the worker's: the server, and its key file.
     `sign_in` is the worker's too (`sign_in_variables`), read from `environ`, the app's own.
     The template a tracker inherits comes from that server too, so nothing of the machine's
-    Overseer is passed on."""
+    Overseer is passed on.
+
+    `project_env` is what the project's setup left for its sessions (`setup.SessionEnv`, item
+    project-setup): its folders in front of PATH, its variables set. The hooks claude runs, the
+    guard among them, and every command of the session inherit them."""
     env: dict[str, str | None] = {
         # tracker.py flags what a session files auto: filed by an agent of its own accord.
         "AGENTIC_LOOP": "1",
@@ -255,6 +264,8 @@ def session_variables(
         # The native Windows PowerShell tool, as the script asks for it.
         env["CLAUDE_CODE_USE_POWERSHELL_TOOL"] = "1"
     env.update(sign_in_variables(sign_in, environ))
+    if project_env is not None:
+        project_env.apply(env, environ)
     return env
 
 

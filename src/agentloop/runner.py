@@ -363,13 +363,15 @@ def _detached() -> list[dict]:
     return [{"start_new_session": True}]
 
 
-def command(name: str) -> list[str]:
+def command(name: str, setup: bool = False) -> list[str]:
     """The command that runs a loop with this same app: a build's folder (build.py), which Python
-    runs through its __main__.py, or else the installed package."""
+    runs through its __main__.py, or else the installed package. With `setup`, a run that only
+    sets its project up again (item project-setup)."""
     package = Path(__file__).resolve().parent
+    more = ["--setup-only"] if setup else []
     if (package.parent / "__main__.py").is_file():
-        return [sys.executable, str(package.parent), "run", name, "--managed"]
-    return [sys.executable, "-m", "agentloop", "run", name, "--managed"]
+        return [sys.executable, str(package.parent), "run", name, "--managed", *more]
+    return [sys.executable, "-m", "agentloop", "run", name, "--managed", *more]
 
 
 def output_path(name: str) -> Path:
@@ -396,8 +398,10 @@ class Runner:
             raise RunnerError(f"No loop named {name}. The loops are: {known}")
         return found
 
-    def start(self, name: str) -> LoopStatus:
-        """Starts the loop as a process of its own. Refused while its project is being worked."""
+    def start(self, name: str, setup: bool = False) -> LoopStatus:
+        """Starts the loop as a process of its own. Refused while its project is being worked.
+        With `setup`, a run that runs its project's setup script again and ends, no session run
+        (item project-setup)."""
         found = self._loop(name)
         files = _files(found)
         # A loop of ours that has said how it ended is waited for, for the moment it takes to exit.
@@ -431,7 +435,7 @@ class Runner:
         loop_mod.remove(files.status)
         loop_mod.remove(files.started)
         with open(files.output, "wb") as out, open(os.devnull, "rb") as nothing:
-            argv = command(name)
+            argv = command(name, setup)
             process = None
             for options in _detached():
                 try:

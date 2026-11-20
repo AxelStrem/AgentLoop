@@ -80,7 +80,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-from agentloop import accounts, colours, commits, config, definition, session, sync, tools, usage, watch
+from agentloop import accounts, colours, commits, config, definition, session, setup, sync, tools, usage, watch
 
 # The pause between clean iterations, in seconds.
 COOLDOWN = 5
@@ -432,8 +432,15 @@ class Run:
         worker: str | None = None,
         on_start: Callable[[subprocess.Popen], None] | None = None,
         lock_wait: float = 0.0,
+        setup_only: bool = False,
+        again: bool = False,
     ):
         self.out = out
+        # A run that only sets the project up, and runs no session: `agentloop setup`, and the
+        # page's Set up again on a loop that is stopped (item project-setup). `again` runs the
+        # script whether or not it is due.
+        self.setup_only = setup_only
+        self.again = again
         self.paint = paint
         self.clock = clock or usage.Clock()
         self.on_start = on_start
@@ -483,6 +490,9 @@ class Run:
         self.definition_tag = loaded.tag
         self.definition_away = False
         self.bundle = bundle
+        # What the project's setup script left for its sessions, once it has run or been read
+        # (item project-setup); None while there is none.
+        self.project_env: setup.SessionEnv | None = None
         self.overrides = {name: value for name, value in (overrides or {}).items() if value is not None}
         self.settings = config.loop_settings(machine, loop, bundle)
         self.settings.update(self.overrides)
@@ -968,7 +978,7 @@ class Run:
         self.variables = session.session_variables(
             author=signature(route["model"], route), scratch=self.scratch, tracker=self.tracker,
             item=f"{Path(self.tracker).stem}:{item['handle']}", claude=self.worker.claude,
-            overseer=self.overseer, sign_in=self.worker.sign_in,
+            overseer=self.overseer, sign_in=self.worker.sign_in, project_env=self.project_env,
         )
         try:
             final = self.run_phase(prompt_kind, item, route, session_id, resume, from_)
@@ -1219,7 +1229,8 @@ class Run:
             # A project read from its tracker has no bundle; its tools fetched from there, when it
             # lists any, stand in for one (item tools-fetch).
             where=session.where_you_are(self.bundle.folder or self.bundle.files, folders, places, self.bundle.about,
-                                        fetched=self.bundle.folder is None),
+                                        fetched=self.bundle.folder is None,
+                                        project_env=setup.env_dir(self.project) if self.project_env is not None else None),
             values=session.placeholders(self.bundle.folder or self.bundle.files, folders, places),
         )
         session.write_session_settings(self.session_settings)
@@ -1273,6 +1284,8 @@ class Run:
 
     def _loop(self) -> int:
         self.started_at = datetime.fromtimestamp(self.clock.now()).strftime("%Y%m%d-%H%M%S")
+        if self.setup_only:
+            return self._setup_alone()
         max_iterations = self._s("maxIterations")
         self.say(f" Starting the agent loop on {self.project}. To stop it once the item at work is done, make the file {self.stop_file} - or at once, {self.kill_file}", "Cyan")
         status = 0
@@ -1291,6 +1304,10 @@ class Run:
             # A changed definition, before the next session: read again after a session, and
             # waited on from the first while one is still to be accepted (item doc-change).
             ended = self._definition(read=self.iteration > 0)
+            if ended is None:
+                # The project's tools, set up before its first session and whenever the accepted
+                # definition's setup script changes (item project-setup).
+                ended = self._setup()
             if ended is not None:
                 status = ended
                 break
@@ -1484,6 +1501,78 @@ class Run:
             pass
         return self.settings.get("acceptDefinition", "auto")
 
+    # The project's setup script (item project-setup). The script has nothing like it: its machine
+    # had the tools already.
+
+    def _setup_mode(self) -> str:
+        """setup, read from the settings each time, as `_accept_mode` reads acceptDefinition."""
+        try:
+            machine = config.load_machine()
+            found = machine.settings.loop(self.loop.name)
+            if found is not None:
+                return config.setup_mode(machine, found)
+        except (config.ConfigError, OSError):
+            pass
+        return self.settings.get("setup", "auto")
+
+    def _setup(self) -> int | None:
+        """Before a session: the setup script the accepted definition names for this system, run
+        when it has not run for this script, or last failed, or was asked to run again; and what it
+        left for the sessions, read. None to go on; 1 when it failed, with the end of its output
+        said, for the person to put right before the loop starts again."""
+        tool = config.setup_tool(self.bundle.raw) if self.bundle.source == "tracker" else None
+        if tool is None or self.bundle.files is None or self._setup_mode() == "off":
+            if self.project_env is not None:
+                self.project_env = None
+                self._write_system()
+            return None
+        script = self.bundle.files / "tools" / tool["file"]
+        try:
+            if setup.due(self.project, tool):
+                self.say(f" Setting up {self.project}'s tools: {tool['file']}, in {_slashes(setup.env_dir(self.project))}.", "Cyan")
+                self._status(state="setting-up")
+                found = setup.run(self.project, script, tool, lambda line: self.say(f"  {line}", "DarkGray"),
+                                  on_start=self._setup_started)
+                self.say(f" {self.project} is set up.", "Green")
+                self._status(state="running")
+            elif self.project_env is None:
+                found = setup.session_env(self.project)
+            else:
+                return None
+        except (setup.SetupError, OSError) as error:
+            # An OSError is the project's folder or its record not written: its type only, for
+            # its message names paths.
+            if isinstance(error, OSError):
+                error = f"its folder could not be written ({type(error).__name__})"
+            self.say(f" {self.project}'s setup failed: {error}. No session runs until it succeeds: put it right, then "
+                     f"start the loop again, or use Set up again on the page (agentloop setup {self.loop.name} --again).", "Red")
+            return 1
+        finally:
+            remove(self.state_file)
+        self.project_env = found
+        self._write_system()
+        return None
+
+    def _setup_alone(self) -> int:
+        """A run that sets the project up and ends: 0 when it is set up, or has nothing to set up."""
+        tool = config.setup_tool(self.bundle.raw) if self.bundle.source == "tracker" else None
+        if tool is None:
+            self.say(f" {self.project}'s definition names no setup script for this system: nothing to set up.", "Green")
+            return 0
+        if self._setup_mode() == "off":
+            self.say(f" The loop {self.loop.name} has setup off: its machine has the tools already. Nothing was run.", "Yellow")
+            return 0
+        if self.again:
+            setup.forget(self.project)
+        elif not setup.due(self.project, tool):
+            self.say(f" {self.project} is set up already, by this {tool['file']}.", "Green")
+            return 0
+        return self._setup() or 0
+
+    def _setup_started(self, process: subprocess.Popen) -> None:
+        """running.json for the setup script, as for a session's claude, so that a kill ends it at once."""
+        write_json(self.state_file, {"pid": os.getpid(), "child": process.pid, "session": None, "item": None, "resume": None})
+
     def _stop_asked(self, where: str) -> bool:
         """A stop or a kill asked while the loop waits on something other than a session."""
         if self.kill_file.exists():
@@ -1631,7 +1720,7 @@ class Run:
         self.variables = session.session_variables(
             author=signature(plan.route["model"], plan.route), scratch=self.scratch, tracker=self.tracker,
             item=f"{Path(self.tracker).stem}:{item['handle']}", claude=self.worker.claude,
-            overseer=self.overseer, sign_in=self.worker.sign_in,
+            overseer=self.overseer, sign_in=self.worker.sign_in, project_env=self.project_env,
         )
         prompt_file = dry / "prompt.md"
         prompt_file.write_bytes(self.prompt(plan.kind, item, None).encode("utf-8"))

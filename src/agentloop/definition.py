@@ -134,14 +134,29 @@ def _value(node: dict | None) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _flag(node: dict | None) -> bool:
+    """A bool field: true only when the server sends it so, `{"Boolean": true}`; absent is false."""
+    if node is None:
+        return False
+    value = (node.get("parameters") or {}).get("value")
+    if isinstance(value, dict) and len(value) == 1:
+        value = next(iter(value.values()))
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
 def _tools(node: dict | None) -> list[dict]:
     """The Tools list's entries as {"file", "sha256", "systems"}, in order; systems empty for every
-    system, as the definition's own `systems` is."""
+    system, as the definition's own `systems` is. A tool ticked as the setup script has `"setup":
+    true` as well (item project-setup) - only then, so that a definition without one keeps the
+    version it had before setups were read."""
     tools = []
     for entry in (node or {}).get("children") or []:
         systems = [s.strip() for s in _value(_child(entry, "systems")).split(",") if s.strip()]
-        tools.append({"file": _value(_child(entry, "file")).strip(), "sha256": _value(_child(entry, "sha256")).strip().lower(),
-                      "systems": systems})
+        tool = {"file": _value(_child(entry, "file")).strip(), "sha256": _value(_child(entry, "sha256")).strip().lower(),
+                "systems": systems}
+        if _flag(_child(entry, "setup")):
+            tool["setup"] = True
+        tools.append(tool)
     return tools
 
 
@@ -685,7 +700,9 @@ def _tools_diff(old: list | None, new: list | None, old_files: Path | None, new_
     changed = []
     for name, tool in after.items():
         was = before.get(name)
-        if was is None or (was.get("sha256") == tool.get("sha256") and was.get("systems") == tool.get("systems")):
+        setup_changed = bool(was and was.get("setup")) != bool(tool.get("setup"))
+        if was is None or (was.get("sha256") == tool.get("sha256") and was.get("systems") == tool.get("systems")
+                           and not setup_changed):
             continue
         contents = was.get("sha256") != tool.get("sha256")
         if contents and _same_tool(old_files / "tools" / name if old_files else None,
@@ -693,7 +710,7 @@ def _tools_diff(old: list | None, new: list | None, old_files: Path | None, new_
             # Listed by another hash - the raw one before, the normalised one now - but the same
             # file once line endings are set aside: nothing to review (item tools-eol).
             contents = False
-            if was.get("systems") == tool.get("systems"):
+            if was.get("systems") == tool.get("systems") and not setup_changed:
                 continue
         lines = None
         if contents:
@@ -702,10 +719,14 @@ def _tools_diff(old: list | None, new: list | None, old_files: Path | None, new_
             if a is not None and b is not None:
                 lines = list(difflib.unified_diff(a, b, lineterm="", n=2))[2:]
         changed.append({"file": name, "contents": contents, "old_systems": was.get("systems") or [],
-                        "new_systems": tool.get("systems") or [], "lines": lines})
+                        "new_systems": tool.get("systems") or [], "lines": lines,
+                        "old_setup": bool(was.get("setup")), "new_setup": bool(tool.get("setup"))})
     return {
-        "added": [{"file": n, "systems": t.get("systems") or []} for n, t in after.items() if n not in before],
-        "removed": [{"file": n, "systems": t.get("systems") or []} for n, t in before.items() if n not in after],
+        # A setup script says so; any other tool reads as it did before setups were read.
+        "added": [{"file": n, "systems": t.get("systems") or [], **({"setup": True} if t.get("setup") else {})}
+                  for n, t in after.items() if n not in before],
+        "removed": [{"file": n, "systems": t.get("systems") or [], **({"setup": True} if t.get("setup") else {})}
+                    for n, t in before.items() if n not in after],
         "changed": changed,
     }
 
@@ -763,11 +784,14 @@ def diff_lines(found: dict) -> list[str]:
 
     def systems_said(systems: list) -> str:
         return ", ".join(systems) or "every system"
-    out += [f"+ tool {t['file']}" + (f" ({systems_said(t['systems'])})" if t["systems"] else "") for t in tools["added"]]
+    out += [f"+ tool {t['file']}" + (f" ({systems_said(t['systems'])})" if t["systems"] else "")
+            + (", the setup script" if t.get("setup") else "") for t in tools["added"]]
     out += [f"- tool {t['file']}" for t in tools["removed"]]
     for t in tools["changed"]:
         if t["old_systems"] != t["new_systems"]:
             out.append(f"~ tool {t['file']} systems: {systems_said(t['old_systems'])} -> {systems_said(t['new_systems'])}")
+        if t.get("old_setup") != t.get("new_setup"):
+            out.append(f"~ tool {t['file']} " + ("is now the setup script" if t.get("new_setup") else "is no longer the setup script"))
         if t["contents"]:
             out.append(f"~ tool {t['file']} changed" + (":" if t["lines"] else ""))
             out += [f"  {line}" for line in t["lines"] or []]
@@ -873,7 +897,9 @@ def preview(settings: config.Settings, address: str, key_file: str | None, worke
         "settings": raw.get("settings") or {},
         # The project's tools, each with whether it is for this machine's system and so fetched
         # when the loop is added (item tools-fetch).
-        "tools": [{"file": t["file"], "systems": t["systems"], "here": t in config.tools_here(raw)}
+        # The setup script says so (item project-setup).
+        "tools": [{"file": t["file"], "systems": t["systems"], "here": t in config.tools_here(raw),
+                   **({"setup": True} if t.get("setup") else {})}
                   for t in raw.get("tools") or []],
     }
 

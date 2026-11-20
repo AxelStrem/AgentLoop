@@ -90,6 +90,86 @@ binary and hashed as it is. A fetched file is written as the server gave it, but
 `.bat` on Windows is written with CRLF, which cmd.exe needs. A project that lists none for this
 system has no `{bundle}`. A path in `Tools` is relative, with `/`, plain names and no `..`.
 
+### Its setup script
+
+A tool ticked **Setup** in the definition is the script that installs what the project's sessions
+need: a compiler, Node, a browser. It is the setup for the systems that tool is for, and a system
+has at most one, so a project gives `setup.sh` for `linux, macos` and `setup.ps1` for `windows`, or
+one `setup.py` for every system. It is fetched and checked by its sha256 like any tool. A changed
+one is a changed definition, so under `acceptDefinition` `"ask"` it does not run until the change
+is accepted.
+
+A loop runs it before its first session, and again before the next session whenever its sha256
+changes or its last run failed. It runs as the person running AgentLoop, never as root: a loop
+running as root refuses it. It is started by its kind: `.ps1` with `pwsh` (else Windows
+PowerShell), `-NoProfile -ExecutionPolicy Bypass -File`; `.sh` with `bash` (else `sh`); `.py` with
+the Python the app runs on; `.cmd` and `.bat` with `cmd /c`; anything else as itself. Its working
+folder is the project's own, `<data>/projects/<project>/env`, and it gets the app's environment
+with:
+
+| Variable | What it is |
+| --- | --- |
+| `AGENTLOOP_PROJECT_ENV` | the project's folder, with forward slashes: install here |
+| `AGENTLOOP_SYSTEM` | `windows`, `macos` or `linux` |
+| `AGENTLOOP_PROJECT` | the project's name |
+
+That folder is shared by every loop of the project on the machine, and outlives upgrades, and a
+container's redeploys when the data folder is a volume. The script writes what it installs there,
+`CARGO_HOME`, `RUSTUP_HOME`, a Node folder or a browser cache, and should be safe to run again: it
+skips what is already there. Installing system packages is not its job, since that needs root.
+On a bare machine it checks for them, and fails naming what is missing.
+
+It leaves `session-env.txt` in the folder to say what every session gets, one line each:
+
+```
+# comments and blank lines are skipped
+PATH={env}/cargo/bin
+CARGO_HOME={env}/cargo
+RUSTUP_HOME={env}/rustup
+```
+
+`PATH=<folder>` puts a folder in front of PATH, in the order written. `NAME=value` sets a variable.
+`{env}` is the project's folder, so the file stays right if the data folder moves. A variable the
+app sets for a session itself, anything starting `OVERSEER_`, `CLAUDE_`, `ANTHROPIC_`, `AGENT_` or
+`AGENTLOOP_`, is refused, as is a line that is neither form. Every command a session runs gets
+these, including the hooks Claude runs, and its system prompt names the folder.
+
+The script's output goes to the loop's output on the page. If it exits with anything but 0, or
+leaves a file that does not read, the loop does not start. The loop's row on the page then shows
+"setup failed" with the end of the output. **Set up again** in the row runs the script again. On a
+loop that is stopped it runs at once, in a run that sets up and ends. On a loop that is running it
+runs before the next session. `agentloop setup <loop>` runs it in a terminal if it is due, and
+`--again` runs it even if it is not. What the last run did is kept in
+`<data>/projects/<project>/setup.json`.
+
+A machine that already has the tools, such as the owner's own, sets `setup` to `"off"`, in its
+`defaults` or in a loop's settings.
+
+```sh
+#!/bin/sh
+# setup.sh: Rust for the project's sessions, in its own folder.
+set -e
+export CARGO_HOME="$AGENTLOOP_PROJECT_ENV/cargo" RUSTUP_HOME="$AGENTLOOP_PROJECT_ENV/rustup"
+command -v cc >/dev/null || { echo "missing: a C compiler (build-essential)"; exit 1; }
+[ -x "$CARGO_HOME/bin/cargo" ] || curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+cat > "$AGENTLOOP_PROJECT_ENV/session-env.txt" <<'EOF'
+PATH={env}/cargo/bin
+CARGO_HOME={env}/cargo
+RUSTUP_HOME={env}/rustup
+EOF
+```
+
+```powershell
+# setup.ps1: the same on Windows.
+$ErrorActionPreference = 'Stop'
+$env:CARGO_HOME = "$env:AGENTLOOP_PROJECT_ENV/cargo"; $env:RUSTUP_HOME = "$env:AGENTLOOP_PROJECT_ENV/rustup"
+if (-not (Test-Path "$env:CARGO_HOME/bin/cargo.exe")) {
+    Invoke-WebRequest https://win.rustup.rs -OutFile rustup-init.exe
+    ./rustup-init.exe -y --no-modify-path; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+}
+Set-Content -Encoding utf8 "$env:AGENTLOOP_PROJECT_ENV/session-env.txt" "PATH={env}/cargo/bin`nCARGO_HOME={env}/cargo`nRUSTUP_HOME={env}/rustup"
+```
+
 ### The copy a loop keeps
 
 Each loop keeps the definition it last read in `loops/<loop>/definition.json` (the tracker, a
@@ -325,6 +405,7 @@ One set of keys, wherever they are written:
 | `autoStart` | `false` | none: the script ends on an empty queue |
 | `autoStartMinutes` | `10` | none |
 | `acceptDefinition` | `"auto"`; or `"ask"`. Not in a project's settings | none: see "When the definition changes" |
+| `setup` | `"auto"`; or `"off"`. Not in a project's settings | none: see "Its setup script" |
 
 A route is `{"model": "opus", "effort": "medium"}`.
 

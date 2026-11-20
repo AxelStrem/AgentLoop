@@ -47,6 +47,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--item", help="with --dry, this item and not the queue's next")
     # Given by the runner: the output is a log file, written in UTF-8 a line at a time.
     run.add_argument("--managed", action="store_true", help=argparse.SUPPRESS)
+    # Given by the runner for the page's Set up again: the setup script run again, no session.
+    run.add_argument("--setup-only", action="store_true", help=argparse.SUPPRESS)
+    setup = sub.add_parser("setup", help="run the setup script a loop's project names for this system, if it is due, and no session")
+    setup.add_argument("loop")
+    setup.add_argument("--again", action="store_true", help="run it whether or not it is due")
+    setup.add_argument("--colour", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
     start = sub.add_parser("start", help="start a loop as a process of its own, which goes on when this ends")
     start.add_argument("loop")
     stop = sub.add_parser("stop", help="stop a loop once the item at work is done, as stop-agent-loop.ps1 does")
@@ -253,7 +259,8 @@ def _run(args: argparse.Namespace) -> int:
         # the moment that takes: so it tries for a little while before it gives up.
         run = loop.Run(machine, found, out=lambda line: print(line, flush=True), paint=paint, worker=args.worker,
                        overrides={"maxIterations": args.max_iterations, "model": args.model},
-                       lock_wait=2.0 if args.managed else 0.0)
+                       lock_wait=2.0 if args.managed else 0.0, setup_only=args.setup_only,
+                       again=getattr(args, "again", False) or (args.managed and args.setup_only))
         return run.dry(args.item) if args.dry else run.run()
     except (config.ConfigError, loop.LoopError, session.SessionError) as error:
         # Red, as the script writes what keeps it from starting.
@@ -575,6 +582,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export-definition":
         return _export(args)
     if args.command == "run":
+        return _run(args)
+    if args.command == "setup":
+        # A run that sets the project up and ends, in the terminal (item project-setup).
+        args.managed = args.dry = False
+        args.item = args.max_iterations = args.model = args.worker = None
+        args.setup_only = True
         return _run(args)
     if args.command == "accounts":
         return _accounts(args)

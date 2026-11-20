@@ -66,10 +66,17 @@ DEFAULTS: dict[str, Any] = {
     # its tracker's definition as soon as it changes, "ask" holds the loop until the change is
     # accepted. The machine's to say, in its defaults or a loop's settings - never a project's.
     "acceptDefinition": "auto",
+    # Not the script's (item project-setup): "auto" runs the setup script a project's definition
+    # names for this system before its sessions, "off" never does - for a machine that has the
+    # tools already. The machine's to say, as acceptDefinition is.
+    "setup": "auto",
 }
 
 # What acceptDefinition may be.
 ACCEPT_DEFINITION = ("auto", "ask")
+
+# What setup may be.
+SETUP = ("auto", "off")
 
 
 class ConfigError(Exception):
@@ -216,6 +223,9 @@ def check_run_settings(where: str, field: str, settings: Any) -> None:
         elif key == "acceptDefinition":
             if value not in ACCEPT_DEFINITION:
                 raise ConfigError(where, at, " or ".join(f'"{v}"' for v in ACCEPT_DEFINITION))
+        elif key == "setup":
+            if value not in SETUP:
+                raise ConfigError(where, at, " or ".join(f'"{v}"' for v in SETUP))
         elif key in ("push", "autoStart"):
             if not isinstance(value, bool):
                 raise ConfigError(where, at, "true or false")
@@ -422,8 +432,10 @@ def check_project(raw: dict, where: str) -> None:
     check_run_settings(where, "settings", raw.get("settings"))
     # Whether a changed definition runs before anyone has looked is for the person running the
     # loop to say, not for the project that changes it (item doc-change).
-    if isinstance(raw.get("settings"), dict) and "acceptDefinition" in raw["settings"]:
-        raise ConfigError(where, "settings.acceptDefinition", "is for each machine to set, in its defaults or a loop's settings, not a project")
+    if isinstance(raw.get("settings"), dict):
+        for key in ("acceptDefinition", "setup"):
+            if key in raw["settings"]:
+                raise ConfigError(where, f"settings.{key}", "is for each machine to set, in its defaults or a loop's settings, not a project")
 
 
 # A tool's hash, as a definition's manifest gives it: sha256, in lower-case hex.
@@ -467,6 +479,14 @@ def check_tools(tools: object, where: str) -> None:
         systems = tool.get("systems")
         if not isinstance(systems, list) or any(s not in SYSTEMS for s in systems):
             raise ConfigError(where, f"{field_name}.systems", "empty for every system, or some of " + ", ".join(SYSTEMS))
+        if "setup" in tool and tool["setup"] is not True:
+            raise ConfigError(where, f"{field_name}.setup", "true, or absent")
+    # At most one setup script for each system (item project-setup): which of two would be the
+    # one to run is not for the app to guess.
+    for system in SYSTEMS:
+        setups = [t["file"] for t in tools if t.get("setup") and (not t["systems"] or system in t["systems"])]
+        if len(setups) > 1:
+            raise ConfigError(where, "tools", f"marks {' and '.join(setups)} both as the setup for {system}; one system has one setup")
 
 
 def tools_here(raw: dict) -> list[dict]:
@@ -474,6 +494,12 @@ def tools_here(raw: dict) -> list[dict]:
     that name it."""
     here = this_system()
     return [t for t in raw.get("tools") or [] if not t.get("systems") or here in t["systems"]]
+
+
+def setup_tool(raw: dict) -> dict | None:
+    """The tool a definition marks as the setup script for this machine's system (item
+    project-setup), or None when it marks none."""
+    return next((t for t in tools_here(raw) if t.get("setup")), None)
 
 
 # Machine settings
@@ -829,6 +855,12 @@ def accept_mode(machine: Machine, loop: Loop) -> str:
     """acceptDefinition for a loop: the machine's defaults, then the loop's own settings - a
     project's settings never say it (check_project)."""
     return effective_settings(machine.settings.defaults, loop.settings)["acceptDefinition"]
+
+
+def setup_mode(machine: Machine, loop: Loop) -> str:
+    """setup for a loop: the machine's defaults, then the loop's own settings - a project's
+    settings never say it (check_project)."""
+    return effective_settings(machine.settings.defaults, loop.settings)["setup"]
 
 
 # Repositories, placed

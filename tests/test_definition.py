@@ -20,7 +20,8 @@ def definition_text(description: str = DESCRIPTION, repos=(("code", "The code"),
                     places=(("samples", "Files to check against"),), systems: str = "windows, macos, linux",
                     settings: str = '{"chainUpTo": 1}', tools=()) -> str:
     """A definition document made from the library's template, as `<name>.project.os` holds it.
-    `tools` are (file, sha256, systems) for its Tools list, left out when there are none."""
+    `tools` are (file, sha256, systems), and optionally whether it is the setup script, for its
+    Tools list, left out when there are none."""
     def entries(pairs):
         # (name, about), and for a repository optionally its url and branch after them.
         lines = []
@@ -36,9 +37,10 @@ def definition_text(description: str = DESCRIPTION, repos=(("code", "The code"),
         f"    - description = {json.dumps(description)}",
         "    - Repos {", *entries(repos), "    }",
         "    - Places {", *entries(places), "    }",
-        *(["    - Tools {", *[line for file, sha, on in tools for line in (
+        *(["    - Tools {", *[line for file, sha, on, *setup in tools for line in (
             "        - {", f"            - file = {json.dumps(file)}", f"            - sha256 = {json.dumps(sha)}",
-            f"            - systems = {json.dumps(on)}", "        }")], "    }"] if tools else []),
+            f"            - systems = {json.dumps(on)}", *(["            - setup = true"] if setup and setup[0] else []),
+            "        }")], "    }"] if tools else []),
         f"    - systems = {json.dumps(systems)}",
         f"    - settings = {json.dumps(settings)}",
         "}",

@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from agentloop import accounts, config, definition, keys, runner, session, usage
+from agentloop import accounts, config, definition, keys, runner, session, setup, usage
 from agentloop import loop as loop_mod
 
 HOST = "127.0.0.1"
@@ -223,6 +223,7 @@ ROUTES = [
     ("POST", r"/api/loops/([^/]+)/kill", "kill"),
     ("POST", r"/api/loops/([^/]+)/auto-start", "auto_start"),
     ("POST", r"/api/loops/([^/]+)/accept-definition", "accept_definition"),
+    ("POST", r"/api/loops/([^/]+)/setup", "setup_again"),
     ("POST", r"/api/output", "output"),
     ("GET", r"/api/settings", "get_settings"),
     ("PUT", r"/api/settings", "put_settings"),
@@ -515,6 +516,10 @@ class Handler(BaseHTTPRequestHandler):
             "definition": {"repos": placing.repos, "places": placing.places} if found.tracker and placing else None,
             "definitionChange": changed,
             "acceptDefinition": config.accept_mode(machine, found),
+            # The project's setup script, as the accepted definition names it for this system, and
+            # how its last run went (item project-setup).
+            "setup": setup.state(found.project, config.setup_tool(bundle.raw) if found.tracker and bundle else None,
+                                 config.setup_mode(machine, found)),
             "status": status.as_dict(),
             "missing": self._missing(machine, found, placing),
         }
@@ -719,6 +724,23 @@ class Handler(BaseHTTPRequestHandler):
         if found.tracker is None:
             raise Refused(HTTPStatus.BAD_REQUEST, f"{name} runs on a local bundle, not on a definition.")
         definition.accept(loop_mod.loop_dir(found.project, found.name), found.tracker)
+        self.route_get_loop(name)
+
+    def route_setup_again(self, name: str) -> None:
+        """The page's Set up again: the setup's last run forgotten, so that a loop that is running
+        runs the script before its next session; one that is stopped is started to run it alone,
+        and ends (item project-setup)."""
+        self._body()
+        machine, found = self._machine_loop(name)
+        loaded = definition.project_for(machine, found, loop_mod.loop_dir(found.project, found.name), read=False)
+        if not found.tracker or loaded.project is None or config.setup_tool(loaded.project.raw) is None:
+            raise Refused(HTTPStatus.BAD_REQUEST, f"{found.project}'s definition names no setup script for this system.")
+        if config.setup_mode(machine, found) == "off":
+            raise Refused(HTTPStatus.BAD_REQUEST, f"{name} has setup off; set it to auto in the loop's settings first.")
+        with self.server.loop_lock(name):
+            setup.forget(found.project)
+            if not self.server.runner.status(name).alive:
+                self.server.runner.start(name, setup=True)
         self.route_get_loop(name)
 
     def route_output(self) -> None:

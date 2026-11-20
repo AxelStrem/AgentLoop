@@ -26,6 +26,7 @@ const SETTINGS = {
   autoStart: "When the queue is empty, wait for work rather than end; the Auto button in the loop's row sets this.",
   autoStartMinutes: "While it waits for work, how often to look for an item.",
   acceptDefinition: "When the project's definition changes: auto goes on with it at once, ask runs no more sessions until the change is accepted.",
+  setup: "Run the setup script the project's definition names for this system before its sessions: auto runs it when it changes, off never does.",
 };
 const COMPLEXITIES = ["trivial", "low", "medium", "high", "unassigned"];
 const ROUTE_KEYS = ["triage", ...COMPLEXITIES];
@@ -225,6 +226,16 @@ function renderLoops() {
     if (s.until) stateCell.push(h("span", { class: "sub", text: s.state === "idle" ? `${s.watching ? "on any change, else " : ""}next look ${s.until}` : `until ${s.until}` }));
     if (s.state === "failed" && s.error) stateCell.push(h("span", { class: "problem", text: s.error }));
     if (s.busy) stateCell.push(h("span", { class: "sub", text: s.busy }));
+    // The project's setup script (item project-setup): a failed run with the end of its output,
+    // and one still to run said, for no session runs until it has succeeded.
+    const setupState = (loop.setup || {}).state;
+    if (setupState === "failed") {
+      stateCell.push(h("details", { class: "setup-failed" },
+        h("summary", { class: "problem", text: `setup failed: ${loop.setup.file}` }),
+        h("pre", { class: "mono", text: (loop.setup.tail || []).slice(-15).join("\n") })));
+    } else if (setupState === "due" && !s.alive) {
+      stateCell.push(h("span", { class: "sub", text: `sets up with ${loop.setup.file} at its next start` }));
+    }
     if (!s.alive && loop.missing && loop.missing.length) {
       stateCell.push(h("span", { class: "problem", text: `${loop.missing.length === 1 ? "one thing" : loop.missing.length + " things"} to set before it starts` }));
     }
@@ -257,6 +268,10 @@ function renderLoops() {
         h("button", { type: "button", class: "small danger", "aria-label": `Kill ${loop.name}`, disabled: !s.alive, title: "Stop at once, leaving the session's changes uncommitted", onclick: () => killLoop(loop.name) }, "Kill"),
         h("button", { type: "button", class: "small toggle", "aria-pressed": String(!!loop.effective.autoStart), "aria-label": `Auto-start ${loop.name}`, title: "On: wait for work when the queue is empty, looking every so often, rather than end", onclick: () => toggleAuto(loop.name, canStart) }, "Auto"),
         h("button", { type: "button", class: "small", "aria-label": `Output of ${loop.name}`, onclick: () => openPane(loop.name, true) }, "Output"),
+        setupState && setupState !== "none" && setupState !== "off" ? h("button", {
+          type: "button", class: "small", "aria-label": `Set up ${loop.name} again`, disabled: setupState === "due" && s.alive,
+          title: `Run ${loop.setup.file} again: now when the loop is stopped, else before its next session`, onclick: () => setUpAgain(loop.name),
+        }, "Set up again") : null,
         h("button", { type: "button", class: "small", "aria-label": `Edit ${loop.name}`, onclick: () => editLoop(loop.name) }, "Edit"),
         // A copy of a copy is a copy of its original: one level only.
         h("button", { type: "button", class: "small", "aria-label": `Copy ${loop.name}`, title: "A second loop on this project, in clones of its own", onclick: () => editLoop(null, null, loop.like || loop.name) }, "Copy"),
@@ -296,10 +311,13 @@ function showDefinitionChange(name) {
   // The project's tools (item tools-fetch): a changed one's text diff comes after the list.
   const tools = d.tools || { added: [], removed: [], changed: [] };
   const systemsSaid = (systems) => (systems.length ? systems.join(", ") : "every system");
-  for (const t of tools.added) list.push(h("li", { class: "added" }, "added tool ", h("code", { text: t.file }), t.systems.length ? ` (${systemsSaid(t.systems)})` : ""));
+  for (const t of tools.added) list.push(h("li", { class: "added" }, "added tool ", h("code", { text: t.file }), t.systems.length ? ` (${systemsSaid(t.systems)})` : "",
+    t.setup ? ", the setup script" : ""));
   for (const t of tools.removed) list.push(h("li", { class: "removed" }, "removed tool ", h("code", { text: t.file })));
   for (const t of tools.changed) {
     if (t.old_systems.join() !== t.new_systems.join()) list.push(h("li", {}, "tool ", h("code", { text: t.file }), ` systems: ${systemsSaid(t.old_systems)} → ${systemsSaid(t.new_systems)}`));
+    // Whether it is the setup script, which AgentLoop runs on this machine (item project-setup).
+    if (!!t.old_setup !== !!t.new_setup) list.push(h("li", {}, "tool ", h("code", { text: t.file }), t.new_setup ? " is now the setup script" : " is no longer the setup script"));
     if (t.contents) list.push(h("li", {}, "changed tool ", h("code", { text: t.file }), t.lines ? "" : " (not text, or not both fetched here)"));
   }
   if (list.length) body.append(h("ul", { class: "changes" }, list));
@@ -417,6 +435,21 @@ async function toggleAuto(name, canStart) {
     await readLoops();
     say(`Auto-start is ${on ? "on" : "off"} for ${name}.`);
     if (on && canStart) await startLoop(name);
+  } catch (error) {
+    failed(error);
+  }
+}
+
+// Runs the project's setup script again (item project-setup): at once, in a run of its own, on a
+// loop that is stopped; before the next session on one that is running.
+async function setUpAgain(name) {
+  const running = (loopOf(name) || { status: {} }).status.alive;
+  try {
+    const fresh = await api("POST", `/api/loops/${encodeURIComponent(name)}/setup`, {});
+    Object.assign(loopOf(name), fresh);
+    renderLoops();
+    if (!running) openPane(name, true);
+    say(running ? `${name} sets up again before its next session.` : `${name} is setting up again.`);
   } catch (error) {
     failed(error);
   }
@@ -757,8 +790,9 @@ function settingRow(key, value, beneath) {
     inputs = [box];
     control.append(h("label", { class: "group" }, box, key === "push" ? "push" : "on"));
     collect = () => box.checked;
-  } else if (key === "acceptDefinition") {
-    const select = h("select", {}, ["auto", "ask"].map((v) => h("option", { value: v, selected: v === (shown || "auto") }, v)));
+  } else if (key === "acceptDefinition" || key === "setup") {
+    const values = key === "setup" ? ["auto", "off"] : ["auto", "ask"];
+    const select = h("select", {}, values.map((v) => h("option", { value: v, selected: v === (shown || "auto") }, v)));
     inputs = [select];
     control.append(select);
     collect = () => select.value;
@@ -1023,6 +1057,12 @@ async function addFromTracker() {
       const here = tools.filter((t) => t.here);
       parts.push(field("tools", here.length ? `Fetched to this machine, checked by hash: ${here.length} of ${tools.length}.` : "None is for this system.",
         h("span", {}, tools.map((t, i) => [i ? ", " : "", h("code", { class: t.here ? "" : "sub", text: t.file })]).flat()), "tools"));
+      // The setup script for this system, run before the loop's first session (item project-setup).
+      const setupHere = here.find((t) => t.setup);
+      if (setupHere) {
+        parts.push(field("setup", "Run before the first session, as you, to install the tools the sessions need; again whenever it changes. A loop's setup setting can turn it off.",
+          h("code", { text: setupHere.file }), "setup"));
+      }
     }
     parts.push(h("h3", { text: "Where each is on this machine" }));
     shown.repos.forEach((repo, index) => {
