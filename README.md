@@ -20,7 +20,7 @@ To use AgentLoop, install a release with one line - `curl -LsSf
 https://github.com/AxelStrem/AgentLoop/releases/latest/download/install.sh | sh` on macOS and Linux,
 `irm https://github.com/AxelStrem/AgentLoop/releases/latest/download/install.ps1 | iex` on Windows:
 [docs/install.md](docs/install.md). Each release is also a container image, `ghcr.io/axelstrem/agentloop`,
-which the same page covers under "Running in a container". What follows is for a clone, to work on
+which [docs/container.md](docs/container.md) covers, with a template for Unraid. What follows is for a clone, to work on
 AgentLoop itself.
 
 A loop runs from a build, never from the clone, so that editing the code cannot change a loop

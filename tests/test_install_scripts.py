@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -134,3 +135,53 @@ def test_the_release_waits_for_the_image() -> None:
     assert re.search(r"^  image:\n    needs: \[build, try\]", text, re.M)
     assert "needs: [build, try, image]" in text
     assert "if: github.ref_type == 'tag'\n        uses: docker/build-push-action" in text
+
+
+# The Unraid template (item unraid-template).
+TEMPLATE = ROOT / "docker" / "unraid" / "agentloop.xml"
+
+
+def _template_configs() -> dict[str, "ET.Element"]:
+    root = ET.parse(TEMPLATE).getroot()
+    return {c.get("Target"): c for c in root.findall("Config")}
+
+
+def test_the_unraid_template_names_the_image_the_port_and_the_volume() -> None:
+    root = ET.parse(TEMPLATE).getroot()
+    assert root.findtext("Repository") == "ghcr.io/axelstrem/agentloop:latest"
+    assert "[PORT:8765]" in (root.findtext("WebUI") or "")
+    configs = _template_configs()
+    assert configs["8765"].get("Type") == "Port"
+    assert configs["/data"].get("Type") == "Path"
+
+
+def test_the_unraid_template_has_a_described_field_for_each_variable_the_entrypoint_documents() -> None:
+    header = ENTRYPOINT.read_text(encoding="utf-8").split("set -eu")[0]
+    documented = set(re.findall(r"^#   ([A-Z_]+)(?:, ([A-Z_]+))?\s{2,}", header, re.M))
+    names = {n for pair in documented for n in pair if n}
+    assert {"PUID", "PGID", "EXTRA_PACKAGES", "GIT_TOKEN", "GIT_USER_EMAIL"} <= names
+    names |= {"AGENTLOOP_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+    configs = _template_configs()
+    for name in names:
+        config = configs.get(name)
+        assert config is not None, name
+        assert config.get("Type") == "Variable", name
+        assert (config.get("Description") or "").strip(), name
+    for secret in ("AGENTLOOP_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "GIT_TOKEN"):
+        assert configs[secret].get("Mask") == "true", secret
+
+
+def test_the_documents_links_to_other_documents_resolve() -> None:
+    for page in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]:
+        text = page.read_text(encoding="utf-8")
+        for target in re.findall(r"\]\(([^)#\s]+\.md|[^)\s]+\.(?:md|xml))(#[^)\s]*)?\)", text):
+            link = target[0]
+            if link.startswith("http"):
+                continue
+            assert (page.parent / link).is_file(), f"{page.name} links to {link}"
+    # An anchor into the container page names a heading it has.
+    container = (ROOT / "docs" / "container.md").read_text(encoding="utf-8")
+    headings = {re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-") for h in re.findall(r"^#+ (.+)$", container, re.M)}
+    for page in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]:
+        for anchor in re.findall(r"container\.md#([a-z0-9-]+)", page.read_text(encoding="utf-8")):
+            assert anchor in headings, f"{page.name} links to container.md#{anchor}"

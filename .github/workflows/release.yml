@@ -260,7 +260,7 @@ jobs:
             echo "docker pull ghcr.io/$owner/agentloop:$VERSION"
             echo '```'
             echo
-            echo '`:latest` is the newest release. See "Running in a container" in docs/install.md.'
+            echo '`:latest` is the newest release. See docs/container.md.'
           } > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
             --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

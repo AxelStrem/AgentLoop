@@ -6,7 +6,7 @@
 #
 #     docker build -f docker/Dockerfile -t agentloop .
 #
-# docs/install.md, "Running in a container", says what to give it.
+# docs/container.md, says what to give it.
 
 # Node comes from its own image, of the same Debian release as Python's, rather than from a script
 # piped to a shell.

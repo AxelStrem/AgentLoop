@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!-- An Unraid template for the AgentLoop image (item unraid-template). Add it on the Docker tab by
+     its address, under Template repositories; docs/container.md says how. The image's variables are
+     those docker/entrypoint.sh documents. No Icon: the repository has none. -->
+<Container version="2">
+  <Name>agentloop</Name>
+  <Repository>ghcr.io/axelstrem/agentloop:latest</Repository>
+  <Registry>https://github.com/AxelStrem/AgentLoop/pkgs/container/agentloop</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/AxelStrem/AgentLoop/issues</Support>
+  <Project>https://github.com/AxelStrem/AgentLoop</Project>
+  <Overview>AgentLoop runs Claude sessions on the items of an Overseer project tracker, one after another, with a web page to start and watch them. Set AGENTLOOP_TOKEN, which signs in to the page, and a Claude sign-in (CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token`). To give a loop its repositories, use "Add another Path" once for each clone: a container path such as /code/orchard, and the host folder that holds it. Name that container path in the loop's places on the page. See docs/container.md in the repository.</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8765]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/AxelStrem/AgentLoop/main/docker/unraid/agentloop.xml</TemplateURL>
+  <ExtraParams/>
+  <PostArgs/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web page" Target="8765" Default="8765" Mode="tcp" Description="The port of AgentLoop's page, which asks for AGENTLOOP_TOKEN." Type="Port" Display="always" Required="true" Mask="false">8765</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/agentloop" Mode="rw" Description="Everything AgentLoop keeps: settings, logs, Claude logins, key files, each project's tools and the user's home folder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/agentloop</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="The user id the loops and their sessions run as; 99 is Unraid's nobody. Never 0. Give the id that owns your clones." Type="Variable" Display="always" Required="true" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="The group id the loops and their sessions run as; 100 is Unraid's users." Type="Variable" Display="always" Required="true" Mask="false">100</Config>
+  <Config Name="AGENTLOOP_TOKEN" Target="AGENTLOOP_TOKEN" Default="" Mode="" Description="The token that signs in to the page: 16 or more random characters, with no spaces, quotes, commas, semicolons or backslashes. Without one, a new token is printed in the log at each start." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="CLAUDE_CODE_OAUTH_TOKEN" Target="CLAUDE_CODE_OAUTH_TOKEN" Default="" Mode="" Description="Claude's sign-in for every worker: the token that `claude setup-token` prints. Leave empty to log in inside the container instead." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="EXTRA_PACKAGES" Target="EXTRA_PACKAGES" Default="" Mode="" Description="Debian packages a project needs beyond the image's, separated by spaces, installed at each start." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="GIT_USER_NAME" Target="GIT_USER_NAME" Default="" Mode="" Description="The name git puts on the loops' commits." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="GIT_USER_EMAIL" Target="GIT_USER_EMAIL" Default="" Mode="" Description="The email git puts on the loops' commits." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="GIT_TOKEN" Target="GIT_TOKEN" Default="" Mode="" Description="A token for pulling and pushing HTTPS remotes, kept in the home folder where only the user can read it." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="GIT_TOKEN_HOST" Target="GIT_TOKEN_HOST" Default="github.com" Mode="" Description="The host GIT_TOKEN is for." Type="Variable" Display="advanced" Required="false" Mask="false">github.com</Config>
+  <Config Name="GIT_TOKEN_USER" Target="GIT_TOKEN_USER" Default="x-access-token" Mode="" Description="The user name sent with GIT_TOKEN; x-access-token is what GitHub takes." Type="Variable" Display="advanced" Required="false" Mask="false">x-access-token</Config>
+</Container>
