@@ -44,11 +44,12 @@ jobs:
             exit 1
           fi
 
-      # build is the workflow's, not the app's: the app has no dependencies.
+      # build is the workflow's, not the app's: the app has no dependencies. Run as pyproject-build,
+      # since `python -m build` finds the repository's own build.py first.
       - name: Build the wheel and the sdist
         run: |
           python -m pip install build
-          python -m build
+          pyproject-build
 
       # AUTOTASK.md and the page are package data, and review-run.py is no module name: a wheel
       # without one of them installs and starts, and fails only in a loop.
