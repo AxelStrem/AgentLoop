@@ -35,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
                                       "else 127.0.0.1. Another address puts the page on the network, behind its token")
     serve.add_argument("--port", type=int, help="the port; the settings' server.port when left out, else 8765; 0 for any free one")
     serve.add_argument("--open", action="store_true", help="open the page in the browser")
+    serve.add_argument("--restart-loops", action="store_true",
+                       help="first start again the loops cut off mid-run, as a container's are when it is stopped")
     run = sub.add_parser("run", help="run one loop in the terminal, as run-agent-loop.ps1 does")
     run.add_argument("loop", help="the loop's name, in the settings; import-psd1 names it after its project")
     run.add_argument("--max-iterations", type=int, help="how many items to work, at most (maxIterations)")
@@ -597,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
         from agentloop import config, server
 
         try:
-            return server.serve(args.port, args.open, args.host)
+            return server.serve(args.port, args.open, args.host, args.restart_loops)
         except config.ConfigError as error:
             print(f"agentloop serve: {error}", file=sys.stderr)
             return 2

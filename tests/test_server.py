@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from agentloop import accounts, config, runner, server
+from agentloop import loop as loop_mod
 
 from test_runner import Machine, move, write
 
@@ -287,6 +288,72 @@ def test_serve_listens_where_it_is_told_with_the_token_set(home, monkeypatch, ca
     out = capsys.readouterr()
     assert made[0].token == "a-token-from-the-container" and not made[0].wide
     assert "sign in with the token you set" in out.out and "a-token-from-the-container" not in out.out + out.err
+
+
+def test_serve_ends_on_sigterm_as_on_ctrl_c(home, monkeypatch):
+    import signal
+
+    monkeypatch.setenv("AGENTLOOP_HOST", "127.0.0.1")
+    before = signal.getsignal(signal.SIGTERM)
+
+    def terminated(self, *args, **kwargs):
+        # Only once serve has a handler of its own: SIGTERM's own would end the test run.
+        assert signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, signal.SIG_IGN, None, before)
+        signal.raise_signal(signal.SIGTERM)
+
+    monkeypatch.setattr(server.Server, "serve_forever", terminated)
+    assert server.serve(0) == 0
+    assert signal.getsignal(signal.SIGTERM) == before
+
+
+def write_said(name: str, state: str | None, kill: bool = False) -> None:
+    """A loop's folder as its last run left it: what it said in status.json, and a kill file."""
+    folder = loop_mod.loop_dir("proj", name)
+    folder.mkdir(parents=True, exist_ok=True)
+    if state is not None:
+        loop_mod.write_json(folder / "status.json", {"state": state, "item": "alpha"})
+    if kill:
+        (folder / "kill").touch()
+
+
+def test_the_loops_cut_off_mid_run_are_started_again(home, monkeypatch, capsys):
+    path = config.paths().settings
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    names = ["working", "waiting", "idle", "stopped", "failed", "killed", "unsaid", "refused"]
+    raw["loops"] = [loop_entry(name) for name in names]
+    config.save_json(path, raw)
+    # Died saying it was working, waiting out a limit or idle: cut off.
+    write_said("working", "running")
+    write_said("waiting", "waiting")
+    write_said("idle", "idle")
+    write_said("refused", "running")
+    # Stopped, ended with an error, killed, or never said anything: left as they are.
+    write_said("stopped", "stopped")
+    write_said("failed", "failed")
+    write_said("killed", "running", kill=True)
+    write_said("unsaid", None)
+    the_runner = runner.Runner()
+    assert the_runner.cut_off() == ["working", "waiting", "idle", "refused"]
+
+    started = []
+
+    def start(self, name, setup=False):
+        if name == "refused":
+            raise runner.RunnerError("refused cannot start: the script is working proj.")
+        started.append(name)
+
+    monkeypatch.setattr(runner.Runner, "start", start)
+    assert server.restart_cut_off(the_runner) == ["working", "waiting", "idle"]
+    assert started == ["working", "waiting", "idle"]
+    out = capsys.readouterr()
+    assert "Started working again" in out.out and "refused was cut off, and could not be started again" in out.err
+
+    # serve does so only when asked.
+    started.clear()
+    monkeypatch.setenv("AGENTLOOP_HOST", "127.0.0.1")
+    monkeypatch.setattr(server.Server, "serve_forever", lambda self, *a, **k: None)
+    assert server.serve(0) == 0 and started == []
+    assert server.serve(0, restart_loops=True) == 0 and started == ["working", "waiting", "idle"]
 
 
 def test_a_server_on_ipv6_loopback(home):

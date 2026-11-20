@@ -30,6 +30,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import socket
 import sys
 import threading
@@ -916,8 +917,11 @@ def read_output(path: Path, offset: int) -> tuple[int | None, str, int]:
     return identity, data[:whole].decode("utf-8", errors="replace"), offset + whole
 
 
-def serve(port: int | None = None, open_browser: bool = False, host: str | None = None) -> int:
-    """Serves the page until Ctrl-C; the loops it started go on."""
+def serve(port: int | None = None, open_browser: bool = False, host: str | None = None,
+          restart_loops: bool = False) -> int:
+    """Serves the page until Ctrl-C or SIGTERM; the loops it started go on. With `restart_loops`,
+    the loops cut off mid-run - by a container stopped under them, say - are started again first
+    (item docker-image)."""
     settings = config.load_settings()
     host, port = address(settings, port, host)
     token = set_token(settings)
@@ -930,14 +934,57 @@ def serve(port: int | None = None, open_browser: bool = False, host: str | None 
     if server.wide:
         print(f"Listening on {host}, port {server.port}: anyone who can reach it is asked for the token.", flush=True)
     print(f"Serving the page at {server.url}" + (" - sign in with the token you set" if server.token_set else ""), flush=True)
+    if restart_loops:
+        restart_cut_off(server.runner)
     if open_browser:
         import webbrowser
 
         webbrowser.open(server.url)
+    previous = _end_on_sigterm()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
         server.server_close()
     return 0
+
+
+def restart_cut_off(the_runner: runner.Runner) -> list[str]:
+    """Starts again each loop cut off mid-run, saying so; one that cannot start is said and left.
+    Its next start lets go of the item its last run had claimed, as after any loop that died."""
+    started = []
+    try:
+        names = the_runner.cut_off()
+    except config.ConfigError as error:
+        print(f"agentloop serve: no loop was started again: {error}", file=sys.stderr, flush=True)
+        return started
+    for name in names:
+        try:
+            the_runner.start(name)
+        except (runner.RunnerError, config.ConfigError, OSError) as error:
+            reason = str(error) if isinstance(error, (runner.RunnerError, config.ConfigError)) else type(error).__name__
+            print(f"agentloop serve: {name} was cut off, and could not be started again: {reason}", file=sys.stderr, flush=True)
+            continue
+        started.append(name)
+        print(f"Started {name} again: it was cut off mid-run.", flush=True)
+    return started
+
+
+def _end_on_sigterm():
+    """SIGTERM ends serve as Ctrl-C does: `docker stop` sends it, and a process with no handler for
+    it that is the container's first - or is reached only through tini - would otherwise be waited
+    for and then killed. The handler it replaced, or None where none can be set (not the main
+    thread)."""
+    if threading.current_thread() is not threading.main_thread():
+        return None
+
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    try:
+        return signal.signal(signal.SIGTERM, interrupt)
+    except (ValueError, OSError):
+        return None

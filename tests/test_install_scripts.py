@@ -92,3 +92,45 @@ def test_the_powershell_script_stops_without_a_release_or_a_wheel() -> None:
                           capture_output=True, text=True, timeout=120, env=env)
     assert done.returncode != 0
     assert "names no release" in done.stdout + done.stderr
+
+
+# The container image (item docker-image): built and tried by the release workflow alone, since
+# a test must not need Docker. Here only what can be read or run without it.
+
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
+DOCKERFILE = ROOT / "docker" / "Dockerfile"
+
+
+def test_the_entrypoint_has_lf_line_ends_and_parses() -> None:
+    assert b"\r\n" not in ENTRYPOINT.read_bytes()
+    sh = _sh()
+    if sh is None:
+        pytest.skip("no sh")
+    done = subprocess.run([sh, "-n", str(ENTRYPOINT)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+
+
+def test_the_entrypoint_runs_the_command_as_it_is_when_not_root() -> None:
+    sh = _sh()
+    if sh is None:
+        pytest.skip("no sh")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("run as root: the entrypoint would make users")
+    done = subprocess.run([sh, str(ENTRYPOINT), "echo", "the command ran"], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "the command ran"
+
+
+def test_the_image_runs_serve_behind_tini_and_restarts_the_loops() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert 'ENTRYPOINT ["tini", "--", "/usr/local/bin/agentloop-entrypoint"]' in text
+    assert 'CMD ["agentloop", "serve", "--restart-loops"]' in text
+    assert "AGENTLOOP_HOME=/data" in text and "AGENTLOOP_HOST=0.0.0.0" in text
+    assert "COPY docker/entrypoint.sh /usr/local/bin/agentloop-entrypoint" in text
+
+
+def test_the_release_waits_for_the_image() -> None:
+    text = RELEASE.read_text(encoding="utf-8")
+    assert re.search(r"^  image:\n    needs: \[build, try\]", text, re.M)
+    assert "needs: [build, try, image]" in text
+    assert "if: github.ref_type == 'tag'\n        uses: docker/build-push-action" in text

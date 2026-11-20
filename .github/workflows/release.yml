@@ -8,6 +8,12 @@
 # install.ps1 find them. The tag must be `v` + agentloop.__version__, so the version is raised in
 # src/agentloop/__init__.py first.
 #
+# The container image (item docker-image, docker/Dockerfile) is built from the same wheel and tried:
+# started with an empty /data and a token, the page must send a visitor to its sign-in, take the
+# token and refuse a wrong one, run as the user 99 and not as root, and end at once on docker stop.
+# On a tag it is pushed to ghcr.io/<owner>/agentloop as :<version> and :latest, for linux/amd64 and
+# linux/arm64, and the release's notes say how to pull it.
+#
 # Run by hand, it builds and tries the same and publishes nothing: a dry run before tagging.
 #
 # The tests are not run here: tests.yml runs them on every push, the tag's commit included.
@@ -127,8 +133,107 @@ jobs:
       - name: Try it
         run: python .github/try-install.py "${{ needs.build.outputs.version }}"
 
-  release:
+  image:
     needs: [build, try]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image for this runner
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: agentloop:try
+          cache-to: type=gha,mode=max
+          cache-from: type=gha
+
+      # The token is the run's own, and never printed. The page answers through serve-lan's
+      # sign-in: / to the form, the token for a cookie, a wrong one refused, the API with a bearer.
+      - name: Try the image
+        run: |
+          set -eu
+          token="$(openssl rand -hex 24)"
+          data="$RUNNER_TEMP/data"
+          mkdir -p "$data"
+          docker run -d --name agentloop-try -e AGENTLOOP_TOKEN="$token" -v "$data:/data" -p 8765:8765 agentloop:try
+          page=http://127.0.0.1:8765
+          answer() { curl -s -o /dev/null -w '%{http_code}' "$@" || true; }
+          for i in $(seq 60); do
+            [ "$(answer "$page/")" = "303" ] && break
+            sleep 1
+          done
+          fail() { echo "image: $*" >&2; docker logs agentloop-try >&2 || true; exit 1; }
+          [ "$(answer "$page/")" = "303" ] || fail "the page did not answer / with a redirect in 60 s"
+          curl -s -o /dev/null -D - "$page/" | grep -qi '^location: /signin.html' || fail "/ did not send a visitor to the sign-in form"
+          [ "$(answer "$page/signin.html")" = "200" ] || fail "the sign-in form was not served"
+          body="$(printf '{"token": "%s"}' "$token")"
+          [ "$(answer -X POST -H 'Content-Type: application/json' --data "$body" "$page/api/signin")" = "200" ] || fail "the token set was refused at the sign-in"
+          [ "$(answer -X POST -H 'Content-Type: application/json' --data '{"token": "not-the-token-at-all"}' "$page/api/signin")" = "401" ] || fail "a wrong token was not refused"
+          [ "$(answer -H "Authorization: Bearer $token" "$page/api/loops")" = "200" ] || fail "the API refused the token"
+          # Run as the user, not as root: Claude Code refuses its sessions' flag as root.
+          uid="$(docker top agentloop-try -eo uid,args | awk '/agentloop serve/ && !/tini/ {print $1; exit}')"
+          [ "$uid" = "99" ] || fail "serve runs as uid '$uid', not 99"
+          [ "$(stat -c %u "$data/home")" = "99" ] || fail "/data/home does not belong to 99"
+          for tool in "claude --version" "git --version" "node --version" "agentloop --version"; do
+            docker exec -u 99:100 -e HOME=/data/home agentloop-try $tool || fail "$tool did not run as the user"
+          done
+          # docker stop reaches serve through tini, and serve ends on it rather than being killed
+          # after docker's 10 s.
+          started="$(date +%s)"
+          docker stop agentloop-try >/dev/null
+          took=$(( $(date +%s) - started ))
+          [ "$took" -lt 8 ] || fail "docker stop took ${took} s: serve did not end on SIGTERM"
+          echo "image: the page answered through its sign-in, ran as 99, and stopped in ${took} s."
+
+      - name: Log in to the GitHub container registry
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Name the image
+        id: names
+        run: |
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "image=ghcr.io/$owner/agentloop" >> "$GITHUB_OUTPUT"
+
+      - name: Push the image, for amd64 and arm64
+        if: github.ref_type == 'tag'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.names.outputs.image }}:${{ needs.build.outputs.version }}
+            ${{ steps.names.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.build.outputs.version }}
+            org.opencontainers.image.description=The agent loop that works the project trackers, with its web page
+          cache-from: type=gha
+
+  release:
+    needs: [build, try, image]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
@@ -139,7 +244,23 @@ jobs:
           name: dist
           path: dist
 
+      # The notes begin with how to pull the image; gh adds the generated notes after them.
       - name: Attach the wheel, the sdist and the install scripts to a release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "### Docker"
+            echo
+            echo "The image of this release, for linux/amd64 and linux/arm64:"
+            echo
+            echo '```sh'
+            echo "docker pull ghcr.io/$owner/agentloop:$VERSION"
+            echo '```'
+            echo
+            echo '`:latest` is the newest release. See "Running in a container" in docs/install.md.'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

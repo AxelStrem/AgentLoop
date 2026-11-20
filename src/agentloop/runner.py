@@ -19,6 +19,9 @@ the run lock, status.json, running.json, the output - is in files, not in this p
   `kill-agent-loop.ps1` ends it: the tree on Windows (`taskkill /T /F`), the process group on macOS
   and Linux, claude being started in a group of its own (session._popen_options). A loop that has
   not ended a while after is ended the same way.
+- A loop cut off - its process gone mid-run, without being stopped or killed, as a container's are
+  when it is stopped - is one that said it was working and holds no lock (`Runner.cut_off`). `serve
+  --restart-loops` starts those again (item docker-image).
 
 Differences from the scripts, each deliberate:
 - The kill ends the claude running.json names, not every claude.exe whose parent is the loop.
@@ -498,6 +501,11 @@ class Runner:
             # Ended without its say, so its kill file is left for nobody: cleared, as the loop
             # would have cleared it.
             files.kill.unlink(missing_ok=True)
+            # Nor did it say how it ended: said here, so that it reads as killed, and so that
+            # `serve --restart-loops` does not take it for one cut off and start it again.
+            said = _read_json(files.status) or {}
+            loop_mod.write_json(files.status, {**said, "state": "failed", "killed": True,
+                                               "error": "ended by force after the kill", "item": None})
             # Nor did it let go of the item it was working: let go of here, as the loop would have.
             loop_mod.release_left(files.dir)
         self._reap(name)
@@ -508,6 +516,22 @@ class Runner:
         process = self._started.get(name)
         if process is not None and process.poll() is not None and self._started.get(name) is process:
             self._started.pop(name, None)
+
+    def cut_off(self) -> list[str]:
+        """The loops that died mid-run without being stopped or killed: a container stopped under
+        them, or a machine that lost its power (item docker-image). Each said it was working -
+        running, waiting, idle, held or setting up - and holds no lock. A loop stopped or ended
+        says so first, and a killed one leaves its kill file, so neither is taken for one; nor is
+        one that died before it said anything, which may never have begun."""
+        found = []
+        for each in config.load_settings().loops:
+            files = _files(each)
+            said = _read_json(files.status) or {}
+            state = said.get("state")
+            if not state or state in FINAL or files.kill.exists() or held(each):
+                continue
+            found.append(each.name)
+        return found
 
     def status(self, name: str) -> LoopStatus:
         return self._status(self._loop(name))

@@ -123,6 +123,53 @@ uses. They name the variable a secret is in, and never show the secret.
 A worker whose variable is not set is refused when its loop starts, and the error names the
 variable. Nothing of the token or key is written to the settings, the logs or the page.
 
+## Running in a container
+
+Each release is also an image, for `linux/amd64` and `linux/arm64`:
+
+```sh
+docker pull ghcr.io/axelstrem/agentloop:<version>     # or :latest
+```
+
+It runs `agentloop serve` on port 8765, listening on the network, so set `AGENTLOOP_TOKEN` (see
+"Reaching the page from another machine" above). Everything AgentLoop keeps goes in the volume
+`/data`: settings, logs, the workers' Claude folders, key files, each project's tools, and the
+user's home folder (`/data/home`), so a new image keeps it all.
+
+```sh
+docker run -d --name agentloop -p 8765:8765 \
+  -v /path/on/host/agentloop:/data \
+  -v /path/on/host/code:/code \
+  -e AGENTLOOP_TOKEN=<16+ random characters> \
+  -e CLAUDE_CODE_OAUTH_TOKEN=<from claude setup-token> \
+  -e GIT_USER_NAME="Your Name" -e GIT_USER_EMAIL=you@example.org \
+  ghcr.io/axelstrem/agentloop:latest
+```
+
+| Variable | What it does |
+|---|---|
+| `AGENTLOOP_TOKEN` | the page's sign-in token. Without it, a new one is printed in the container's log at each start |
+| `PUID`, `PGID` | the user and group that serve, the loops and their sessions run as; 99 and 100 (Unraid's) when unset. Never 0: Claude Code refuses to run its sessions as root. Give the ids that own your clones |
+| `EXTRA_PACKAGES` | Debian packages a project needs beyond the image's, space-separated, installed at each start |
+| `GIT_USER_NAME`, `GIT_USER_EMAIL` | git's name and email for the loops' commits |
+| `GIT_TOKEN` | a token for HTTPS remotes, kept in `/data/home/.git-credentials`, readable by the user alone. `GIT_TOKEN_HOST` (`github.com`) and `GIT_TOKEN_USER` (`x-access-token`) say what it is for |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude's sign-in for every worker with no `signIn`; see "Signing in to Claude in a container" |
+
+- **Clones** are mounted wherever you like, and a loop's places name them by their paths in the
+  container (`/code/orchard`). Nothing under them is chowned. Sessions write as `PUID`, so the
+  files they make belong to you.
+- **An SSH key** for git goes in `/data/home/.ssh` (the key, and a `known_hosts` beside it), mode
+  600, owned by `PUID`.
+- **System packages:** the image has git, Node, `claude`, a compiler and linker
+  (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, and the libraries headless Chrome
+  needs. A project's setup script installs the rest as the user, into its own folder under `/data`.
+- **Started with `--user`**, the image skips all of the above and runs serve as that user.
+
+**A redeploy** stops the container, and every loop with it: the session at work is cut off, its
+changes left uncommitted in the clone, as after a kill. The new container's serve
+(`agentloop serve --restart-loops`) starts again each loop that was cut off. A loop you had stopped
+stays stopped. Each one lets go of the item its last run claimed, and picks from the queue again.
+
 ## Upgrading
 
 Run the install line again: it installs the latest release over the one you have, and says so. By
