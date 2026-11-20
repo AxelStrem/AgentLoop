@@ -86,6 +86,10 @@ code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monos
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.3rem 0 .6rem; flex-wrap: wrap; }
 .message { margin: .8rem 1.5rem 0; padding: .5rem .8rem; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); }
 .message.error { border-color: var(--danger); color: var(--danger); }
+.signin { max-width: 30rem; margin: 2.5rem auto; display: flex; flex-direction: column; gap: .8rem; }
+.signin label { display: flex; flex-direction: column; gap: .3rem; }
+.signin button { align-self: flex-start; }
+.signin .message { margin: 0; }
 
 button { font: inherit; padding: .3rem .75rem; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--muted); }

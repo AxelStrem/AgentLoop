@@ -39,7 +39,8 @@ launcher the build makes:
 | macOS, Linux | `<path>/agentloop serve --open` |
 
 `serve` prints the page's address, `http://127.0.0.1:8765/?token=...`, and `--open` opens it in
-the browser. The page only answers on this machine, and only to a browser that has the token. A
+the browser. The page only answers on this machine, and only to a browser that has the token
+(`docs/install.md` says how to reach it from another machine, as a container needs). A
 loop started from the page is a process of its own: it keeps working when the app is closed, and
 the app finds it again when it next starts.
 

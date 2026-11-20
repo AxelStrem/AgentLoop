@@ -30,7 +30,9 @@ def _parser() -> argparse.ArgumentParser:
     # check that the installed command runs, reaches for first (item package).
     parser.add_argument("--version", action=_Version, help="print the version and exit")
     sub = parser.add_subparsers(dest="command", metavar="command")
-    serve = sub.add_parser("serve", help="serve the local web page, on 127.0.0.1")
+    serve = sub.add_parser("serve", help="serve the web page, on 127.0.0.1 unless told otherwise")
+    serve.add_argument("--host", help="the address to listen on; AGENTLOOP_HOST, else the settings' server.host, "
+                                      "else 127.0.0.1. Another address puts the page on the network, behind its token")
     serve.add_argument("--port", type=int, help="the port; the settings' server.port when left out, else 8765; 0 for any free one")
     serve.add_argument("--open", action="store_true", help="open the page in the browser")
     run = sub.add_parser("run", help="run one loop in the terminal, as run-agent-loop.ps1 does")
@@ -576,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
         from agentloop import config, server
 
         try:
-            return server.serve(args.port, args.open)
+            return server.serve(args.port, args.open, args.host)
         except config.ConfigError as error:
             print(f"agentloop serve: {error}", file=sys.stderr)
             return 2

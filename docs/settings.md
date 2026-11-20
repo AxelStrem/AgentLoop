@@ -199,7 +199,7 @@ One `settings.json`, in this OS's place for an app's settings.
 | `loops` | a list of loops, below |
 | `defaults` | run settings this PC changed from the app's, below |
 | `install` | where the build is installed (item `build`); absent until a build is |
-| `server` | the page's `host` (`127.0.0.1`) and `port` (item `ui-server`) |
+| `server` | the page's `host` (`127.0.0.1`) and `port` (item `ui-server`). Another `host` (`0.0.0.0`) puts the page on the network; `AGENTLOOP_HOST` and `serve --host` go before it. `names`: the Host names it may be reached by when it does, each `host` or `host:port`; absent lets in any. `tokenFile`: the path of a file holding the page's token, at least 16 characters; `AGENTLOOP_TOKEN` goes before it, and with neither a new token is printed at each start. The token itself is never a setting (item `serve-lan`, and `docs/install.md`) |
 | `claude` | the path of the `claude` to run, for a PC where it is not on `PATH`; absent or `null` finds it on `PATH` (`claude.cmd` on Windows) (item `session`) |
 | `overseer` | none now. In settings written earlier, `{"library": ...}` named Overseer's library folder, where `tracker.py` found the template a tracker inherits, and `{"bin": ...}` the `overseer-server` it once served tracker files with. Both are let be and mean nothing: the server a worker names hands out the template too (item `own-server`) |
 

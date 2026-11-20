@@ -1,11 +1,20 @@
-"""`agentloop serve`: the local web server behind the page.
+"""`agentloop serve`: the web server behind the page.
 
-It listens on loopback only. Any program on the PC can still open a loopback port, and any page in
-the browser can send it requests, so every request must carry a token printed with the address:
-`/?token=...` trades it for a cookie, and the page's requests carry that. A request whose Host is
-not this server's (DNS rebinding) or whose Origin is another site's is refused, a change must be
-sent as JSON (which a form on another site cannot send without a preflight, never answered here),
-and no CORS header is ever sent.
+It listens on loopback unless the person asks for another address (`--host`, `AGENTLOOP_HOST` or
+`server.host`; item serve-lan), as a container must. Any program on the PC can still open a loopback
+port, and any page in the browser can send it requests, so every request must carry a token: the
+one `AGENTLOOP_TOKEN` or the file `server.tokenFile` names holds, else one printed with the address.
+`/?token=...` or the sign-in form trades it for a cookie, and the page's requests carry that. A
+wrong token is answered at most once a second, server-wide, so that it cannot be guessed quickly.
+
+On loopback, a request whose Host is not this server's (DNS rebinding) is refused. Listening more
+widely, any Host is let in unless `server.names` lists the names the page is reached by: a rebound
+page runs under the attacker's name, so the browser never sends it this server's cookie, and the
+sign-in alone keeps it out - while a required list would shut out a container reached by an address
+nobody thought to list. A request whose Origin is another site's is refused either way, a change
+must be sent as JSON (which a form on another site cannot send without a preflight, never answered
+here), and no CORS header is ever sent. The cookie is `Secure` when a proxy says the page was
+served over HTTPS.
 
 The routes answer JSON. A setting's secret is never served, only the paths in the settings: the key
 file is a path there, and no file is read but the page's own.
@@ -21,8 +30,10 @@ import json
 import os
 import re
 import secrets
+import socket
 import sys
 import threading
+import time
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,7 +45,14 @@ from agentloop import accounts, config, definition, keys, runner, session, usage
 from agentloop import loop as loop_mod
 
 HOST = "127.0.0.1"
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+# Addresses that listen on every interface, which a printed address cannot name.
+EVERYWHERE = ("0.0.0.0", "::", "")
 DEFAULT_PORT = 8765
+# The shortest token a person may set: once the page is on a network, the sign-in is its only wall.
+MIN_TOKEN = 16
+# What a page that is not signed in may still fetch: the sign-in form and what it needs.
+PUBLIC = ("/signin.html", "/signin.js", "/page.css")
 PAGE = Path(__file__).resolve().parent / "page"
 # A request body larger than any settings file.
 MAX_BODY = 1 << 20
@@ -74,24 +92,68 @@ def version(path: Path) -> str:
         return ""
 
 
-def address(settings: config.Settings, port: int | None = None) -> int:
-    """The port to listen on: `port`, else the settings' `server.port`, else the default. A
-    `server.host` other than loopback is refused: the page is for this PC alone."""
+def address(settings: config.Settings, port: int | None = None, host: str | None = None) -> tuple[str, int]:
+    """The host and port to listen on: `host`, else `AGENTLOOP_HOST`, else the settings'
+    `server.host`, else loopback; and `port`, else `server.port`, else the default."""
     server = settings.raw.get("server") or {}
-    host = server.get("host")
-    if host is not None and host not in ("127.0.0.1", "localhost"):
-        raise config.ConfigError(settings.path.name, "server.host", "the page listens on 127.0.0.1 only")
-    if port is not None:
-        return port
-    return int(server.get("port") or DEFAULT_PORT)
+    host = host or os.environ.get("AGENTLOOP_HOST") or server.get("host") or HOST
+    if not isinstance(host, str):
+        raise config.ConfigError(settings.path.name, "server.host", "an address to listen on, as text")
+    if port is None:
+        port = int(server.get("port") or DEFAULT_PORT)
+    return host.strip().strip("[]"), port
+
+
+def names(settings: config.Settings) -> list[str] | None:
+    """The settings' `server.names`: the names the page is reached by when it listens widely, or
+    None to let in any."""
+    given = (settings.raw.get("server") or {}).get("names")
+    if given is None:
+        return None
+    if not isinstance(given, list) or not all(isinstance(n, str) and n.strip() for n in given):
+        raise config.ConfigError(settings.path.name, "server.names", "a list of names, each host or host:port")
+    return [n.strip().lower() for n in given]
+
+
+def set_token(settings: config.Settings) -> str | None:
+    """The token the person set: `AGENTLOOP_TOKEN`, else what the file `server.tokenFile` names
+    holds (the settings keep its path, never the token); None for one made up at each start."""
+    token = os.environ.get("AGENTLOOP_TOKEN")
+    where = "AGENTLOOP_TOKEN"
+    if not token:
+        path = (settings.raw.get("server") or {}).get("tokenFile")
+        if not path:
+            return None
+        where = "server.tokenFile"
+        try:
+            token = config.expand(path).read_text(encoding="utf-8")
+        except OSError as error:
+            raise config.ConfigError(settings.path.name, where, f"the file cannot be read ({type(error).__name__})") from None
+    token = token.strip()
+    # It goes into a cookie as it is: none of what a cookie's value cannot hold.
+    if len(token) < MIN_TOKEN or not re.fullmatch(r"[A-Za-z0-9!#$%&'*+\-.^_`|~/=?@:]+", token):
+        raise config.ConfigError(settings.path.name, where,
+                                 f"a token of at least {MIN_TOKEN} characters, without spaces, quotes, commas, semicolons or backslashes")
+    return token
 
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
+    # How long a wrong token waits for its answer, one at a time across the server.
+    wrong_wait = 1.0
+
     def __init__(self, port: int = DEFAULT_PORT, token: str | None = None, the_runner: runner.Runner | None = None,
-                 log: Callable[[str], None] | None = None):
+                 log: Callable[[str], None] | None = None, host: str = HOST, names: list[str] | None = None):
         self.token = token or secrets.token_urlsafe(32)
+        # A token the person set is not printed: they have it already.
+        self.token_set = token is not None
+        self.host = host
+        self.wide = host not in LOOPBACK
+        self.names = names
+        self.wrong_lock = threading.Lock()
+        if ":" in host:
+            self.address_family = socket.AF_INET6
         self.runner = the_runner or runner.Runner()
         self.log = log
         # The runner keeps the processes it started in a dict, so what changes a loop is done one
@@ -101,7 +163,7 @@ class Server(ThreadingHTTPServer):
         self.loop_locks: dict[str, threading.Lock] = {}
         self.locks_lock = threading.Lock()
         self.settings_lock = threading.Lock()
-        super().__init__((HOST, port), Handler)
+        super().__init__((host, port), Handler)
 
     @property
     def port(self) -> int:
@@ -109,18 +171,31 @@ class Server(ThreadingHTTPServer):
 
     @property
     def url(self) -> str:
-        return f"http://{HOST}:{self.port}/?token={self.token}"
+        """The address to open the page at on this machine, with the token unless the person set
+        it. A server on every interface is opened on loopback."""
+        host = HOST if self.host in EVERYWHERE or self.host == "localhost" else self.host
+        shown = f"[{host}]" if ":" in host else host
+        return f"http://{shown}:{self.port}/" + ("" if self.token_set else f"?token={self.token}")
+
+    def hosts(self) -> set[str] | None:
+        """The Host headers let in; None for any, when listening widely with no names listed."""
+        if not self.wide:
+            return {f"127.0.0.1:{self.port}", f"localhost:{self.port}", f"[::1]:{self.port}"}
+        if self.names is None:
+            return None
+        let = set()
+        for name in self.names:
+            let.add(name)
+            # A name given without a port is reached on this one too, or through a proxy on the
+            # scheme's own port.
+            if not re.search(r":\d+$", name):
+                let.add(f"{name}:{self.port}")
+        return let
 
     @property
     def cookie(self) -> str:
         # Cookies are per host, not per port: two servers on one PC each keep their own.
         return f"agentloop-{self.port}"
-
-    def hosts(self) -> set[str]:
-        return {f"127.0.0.1:{self.port}", f"localhost:{self.port}"}
-
-    def origins(self) -> set[str]:
-        return {f"http://{h}" for h in self.hosts()}
 
     def loop_lock(self, name: str) -> threading.Lock:
         with self.locks_lock:
@@ -230,28 +305,86 @@ class Handler(BaseHTTPRequestHandler):
     # Who may reach it
 
     def _admit(self, method: str, path: str, query: dict[str, list[str]]) -> None:
-        if self.headers.get("Host", "") not in self.server.hosts():
+        host = self.headers.get("Host", "").lower()
+        hosts = self.server.hosts()
+        if hosts is not None and host not in hosts:
             raise Refused(HTTPStatus.FORBIDDEN, "Not this server's address.")
         origin = self.headers.get("Origin")
-        if origin is not None and origin not in self.server.origins():
+        if origin is not None and not self._our_origin(origin, host, hosts):
             raise Refused(HTTPStatus.FORBIDDEN, "Requests from another site are refused.")
         if self.headers.get("Sec-Fetch-Site") == "cross-site":
             raise Refused(HTTPStatus.FORBIDDEN, "Requests from another site are refused.")
+        if method in CHANGES and self.headers.get_content_type() != "application/json":
+            raise Refused(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "A change is sent as application/json.")
         given = query.get("token", [None])[0]
-        if method == "GET" and path == "/" and given is not None and self._same(given):
+        if method == "GET" and path == "/" and given is not None:
             # The token for a cookie, and the address without it, so that it stays out of the
             # browser's history and the address bar.
+            self._check(given)
             self.send_response(HTTPStatus.SEE_OTHER)
-            self.send_header("Set-Cookie", f"{self.server.cookie}={self.server.token}; HttpOnly; SameSite=Strict; Path=/")
+            self.send_header("Set-Cookie", self._cookie_line())
             self.send_header("Location", "/")
             self.send_header("Content-Length", "0")
             self._common_headers()
             self.end_headers()
             raise _Answered()
-        if not self._same(self._token()):
-            raise Refused(HTTPStatus.UNAUTHORIZED, "Open the address agentloop serve printed, with its token.")
-        if method in CHANGES and self.headers.get_content_type() != "application/json":
-            raise Refused(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "A change is sent as application/json.")
+        if method == "POST" and path == "/api/signin":
+            self._check(self._body().get("token"))
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Set-Cookie", self._cookie_line())
+            body = b"{}"
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self._common_headers()
+            self.end_headers()
+            self.wfile.write(body)
+            raise _Answered()
+        if method == "GET" and path in PUBLIC:
+            return
+        token = self._token()
+        if method == "GET" and path in ("/", "/index.html") and not (token is not None and self._same(token)):
+            # Not signed in, or with the cookie of a token since changed: to the form, which takes
+            # the token the person set or the one printed.
+            if token is not None:
+                self._wait_wrong()
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", "/signin.html")
+            self.send_header("Content-Length", "0")
+            self._common_headers()
+            self.end_headers()
+            raise _Answered()
+        self._check(token)
+
+    def _our_origin(self, origin: str, host: str, hosts: set[str] | None) -> bool:
+        """Whether the request comes from this server's own page."""
+        parts = urlsplit(origin.lower())
+        if parts.scheme not in (("http", "https") if self.server.wide else ("http",)):
+            return False
+        if hosts is not None:
+            return parts.netloc in hosts
+        # Any name, so the page's own is the one the browser asked for: the Host, or the one a proxy
+        # was asked for and passes on, having put its own upstream address in the Host.
+        forwarded = self.headers.get("X-Forwarded-Host", "").split(",")[0].strip().lower()
+        return bool(parts.netloc) and parts.netloc in (host, forwarded)
+
+    def _check(self, token: Any) -> None:
+        """Refuses a request without the token, and answers a wrong one only after a wait, one at a
+        time across the server, so that it cannot be guessed quickly from the network."""
+        if isinstance(token, str) and self._same(token):
+            return
+        if token is not None:
+            self._wait_wrong()
+        raise Refused(HTTPStatus.UNAUTHORIZED, "Sign in with the token: the one you set, or the one agentloop serve printed.")
+
+    def _wait_wrong(self) -> None:
+        with self.server.wrong_lock:
+            time.sleep(self.server.wrong_wait)
+
+    def _cookie_line(self) -> str:
+        # Secure when the page was served over HTTPS by a proxy in front of this server, which says
+        # so: the header can only keep the person's own cookie off plain HTTP, so it is trusted.
+        secure = self.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower() == "https"
+        return f"{self.server.cookie}={self.server.token}; HttpOnly; SameSite=Strict; Path=/" + ("; Secure" if secure else "")
 
     def _token(self) -> str | None:
         bearer = self.headers.get("Authorization", "")
@@ -757,15 +890,20 @@ def read_output(path: Path, offset: int) -> tuple[int | None, str, int]:
     return identity, data[:whole].decode("utf-8", errors="replace"), offset + whole
 
 
-def serve(port: int | None = None, open_browser: bool = False) -> int:
+def serve(port: int | None = None, open_browser: bool = False, host: str | None = None) -> int:
     """Serves the page until Ctrl-C; the loops it started go on."""
     settings = config.load_settings()
+    host, port = address(settings, port, host)
+    token = set_token(settings)
     try:
-        server = Server(address(settings, port), log=lambda line: print(line, file=sys.stderr, flush=True))
+        server = Server(port, token=token, host=host, names=names(settings),
+                        log=lambda line: print(line, file=sys.stderr, flush=True))
     except OSError as error:
         print(f"agentloop serve: the port could not be opened ({type(error).__name__}); is another server on it?", file=sys.stderr)
         return 1
-    print(f"Serving the page at {server.url}", flush=True)
+    if server.wide:
+        print(f"Listening on {host}, port {server.port}: anyone who can reach it is asked for the token.", flush=True)
+    print(f"Serving the page at {server.url}" + (" - sign in with the token you set" if server.token_set else ""), flush=True)
     if open_browser:
         import webbrowser
 

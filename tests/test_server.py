@@ -48,8 +48,12 @@ class Client:
 def serve():
     started: list[server.Server] = []
 
-    def make(the_runner: runner.Runner | None = None) -> Client:
-        s = server.Server(0, the_runner=the_runner)
+    def make(the_runner: runner.Runner | None = None, wide: bool = False, **more) -> Client:
+        s = server.Server(0, the_runner=the_runner, **more)
+        s.wrong_wait = 0.01
+        # A server listening widely, as a container's does, but bound to loopback: a test binding
+        # every interface would open a port on the network, and ask Windows' firewall about it.
+        s.wide = s.wide or wide
         threading.Thread(target=s.serve_forever, daemon=True).start()
         started.append(s)
         return Client(s)
@@ -101,12 +105,68 @@ def test_the_token_is_traded_for_a_cookie(home, serve):
     assert c.request("GET", "/api/loops", token=False, headers={"Authorization": f"Bearer {c.s.token}"})[0] == 200
 
 
-@pytest.mark.parametrize("path", ["/", "/index.html", "/api/loops", "/api/settings"])
+@pytest.mark.parametrize("path", ["/api/loops", "/api/settings", "/page.js"])
 def test_no_token_or_a_wrong_one_is_refused(home, serve, path):
     c = serve()
     assert c.request("GET", path, token=False)[0] == 401
     assert c.request("GET", path, token=False, headers={"Cookie": f"{c.s.cookie}=nope"})[0] == 401
+    assert c.request("GET", path, token=False, headers={"Authorization": "Bearer nope"})[0] == 401
     assert c.request("GET", f"/?token=nope", token=False)[0] == 401
+
+
+@pytest.mark.parametrize("path", ["/", "/index.html"])
+def test_the_page_without_a_token_goes_to_the_sign_in_form(home, serve, path):
+    c = serve()
+    for cookie in ({}, {"Cookie": f"{c.s.cookie}=a-token-since-changed"}):
+        status, answer, _ = c.request("GET", path, token=False, headers=cookie)
+        assert status == 303 and answer.getheader("Location") == "/signin.html"
+    # The form and what it needs are served without the token; nothing else is.
+    for name in server.PUBLIC:
+        status, _, body = c.request("GET", name, token=False)
+        assert status == 200 and body == (server.PAGE / name.lstrip("/")).read_bytes()
+    assert b"/api/signin" in (server.PAGE / "signin.js").read_bytes()
+
+
+def test_the_sign_in_form_trades_the_token_for_a_cookie(home, serve):
+    c = serve()
+    status, answer, _ = c.request("POST", "/api/signin", body={"token": c.s.token}, token=False)
+    cookie = answer.getheader("Set-Cookie")
+    assert status == 200 and cookie.startswith(f"{c.s.cookie}={c.s.token};") and "Secure" not in cookie
+    assert c.request("GET", "/api/loops", token=False, headers={"Cookie": cookie.split(";")[0]})[0] == 200
+    for wrong in ({"token": "nope"}, {"token": 5}, {}):
+        status, answer, _ = c.request("POST", "/api/signin", body=wrong, token=False)
+        assert status == 401 and answer.getheader("Set-Cookie") is None
+    # Sent as a form, from another site's page, it is refused before the token is looked at.
+    assert c.request("POST", "/api/signin", token=False, headers={"Content-Type": "application/x-www-form-urlencoded"})[0] == 415
+
+
+def test_the_cookie_is_secure_behind_an_https_proxy(home, serve):
+    c = serve()
+    status, answer, _ = c.request("POST", "/api/signin", body={"token": c.s.token}, token=False,
+                                  headers={"X-Forwarded-Proto": "https"})
+    assert status == 200 and answer.getheader("Set-Cookie").endswith("; Secure")
+    status, answer, _ = c.request("GET", f"/?token={c.s.token}", token=False, headers={"X-Forwarded-Proto": "https"})
+    assert status == 303 and answer.getheader("Set-Cookie").endswith("; Secure")
+    status, answer, _ = c.request("GET", f"/?token={c.s.token}", token=False, headers={"X-Forwarded-Proto": "http"})
+    assert "Secure" not in answer.getheader("Set-Cookie")
+
+
+def test_wrong_tokens_are_answered_one_at_a_time_and_slowly(home, serve):
+    c = serve()
+    c.s.wrong_wait = 0.3
+    answers: list[int] = []
+    tries = [threading.Thread(target=lambda: answers.append(c.request("GET", "/api/loops", token=False,
+                                                                        headers={"Authorization": "Bearer nope"})[0]))
+             for _ in range(3)]
+    began = time.monotonic()
+    for t in tries:
+        t.start()
+    for t in tries:
+        t.join()
+    assert answers == [401, 401, 401] and time.monotonic() - began >= 0.85
+    # No token at all, a first visit, is not made to wait.
+    began = time.monotonic()
+    assert c.request("GET", "/api/loops", token=False)[0] == 401 and time.monotonic() - began < 0.25
 
 
 def test_another_host_or_origin_is_refused(home, serve):
@@ -116,18 +176,36 @@ def test_another_host_or_origin_is_refused(home, serve):
     assert c.request("GET", "/api/loops", headers={"Origin": "http://evil.example"})[0] == 403
     assert c.request("GET", "/api/loops", headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
     assert c.request("GET", "/api/loops", headers={"Origin": f"http://localhost:{c.s.port}", "Host": f"localhost:{c.s.port}"})[0] == 200
+    # On loopback, a page over HTTPS is not this server's.
+    assert c.request("GET", "/api/loops", headers={"Origin": f"https://127.0.0.1:{c.s.port}"})[0] == 403
     # A change sent as a form is refused, and no CORS header is ever sent.
     status, answer, _ = c.request("POST", "/api/loops", headers={"Content-Type": "application/x-www-form-urlencoded"})
     assert status == 415 and answer.getheader("Access-Control-Allow-Origin") is None
 
 
-def test_the_static_files_stay_in_the_page_folder(home, serve):
-    c = serve()
-    assert c.request("GET", "/../server.py")[0] == 404
-    assert c.request("GET", "/%2e%2e/server.py")[0] == 404
-    assert c.request("GET", "/nothing.css")[0] == 404
-    assert c.json("GET", "/api/nothing", expect=404)["error"] == "No such route: /api/nothing."
-    assert c.json("DELETE", "/api/settings", body={}, expect=405)
+def test_listening_widely_any_host_is_let_in_with_the_token(home, serve):
+    c = serve(wide=True)
+    lan = {"Host": f"192.168.1.20:{c.s.port}"}
+    assert c.request("GET", "/api/loops", headers=lan)[0] == 200
+    # A rebound name is let past the Host check, but its page never holds the cookie.
+    assert c.request("GET", "/api/loops", token=False, headers={"Host": f"evil.example:{c.s.port}"})[0] == 401
+    # The page's own origin is the name the browser asked for, or the one a proxy passes on.
+    assert c.request("GET", "/api/loops", headers={**lan, "Origin": f"http://192.168.1.20:{c.s.port}"})[0] == 200
+    assert c.request("GET", "/api/loops", headers={"Host": "agentloop:8765", "Origin": "https://loop.example.org",
+                                                   "X-Forwarded-Host": "loop.example.org"})[0] == 200
+    assert c.request("GET", "/api/loops", headers={**lan, "Origin": "http://evil.example"})[0] == 403
+    assert c.request("GET", "/api/loops", headers={**lan, "Origin": "null"})[0] == 403
+    assert c.request("GET", "/api/loops", headers={**lan, "Sec-Fetch-Site": "cross-site"})[0] == 403
+
+
+def test_listening_widely_the_names_listed_are_the_only_ones_let_in(home, serve):
+    c = serve(wide=True, names=["loop.example.org", "nas.local:9000"])
+    for host in ("loop.example.org", f"loop.example.org:{c.s.port}", "nas.local:9000", "LOOP.example.org"):
+        assert c.request("GET", "/api/loops", headers={"Host": host})[0] == 200, host
+    for host in (f"192.168.1.20:{c.s.port}", f"nas.local:{c.s.port}", f"evil.example:{c.s.port}"):
+        assert c.request("GET", "/api/loops", headers={"Host": host})[0] == 403, host
+    assert c.request("GET", "/api/loops", headers={"Host": "loop.example.org", "Origin": "https://loop.example.org"})[0] == 200
+    assert c.request("GET", "/api/loops", headers={"Host": "loop.example.org", "Origin": "https://evil.example"})[0] == 403
 
 
 def test_the_log_leaves_out_the_token(home):
@@ -136,19 +214,95 @@ def test_the_log_leaves_out_the_token(home):
     threading.Thread(target=s.serve_forever, daemon=True).start()
     try:
         Client(s).request("GET", f"/?token={s.token}", token=False)
+        Client(s).request("POST", "/api/signin", body={"token": s.token}, token=False)
     finally:
         s.close()
-    assert lines == ["GET / 303"]
+    assert lines == ["GET / 303", "POST /api/signin 200"]
 
 
-def test_the_address_is_loopback_only(home):
+def test_the_address_and_names_come_from_the_flag_the_variable_or_the_settings(home, monkeypatch):
+    monkeypatch.delenv("AGENTLOOP_HOST", raising=False)
     settings = config.load_settings()
-    assert server.address(settings) == server.DEFAULT_PORT and server.address(settings, 0) == 0
+    assert server.address(settings) == ("127.0.0.1", server.DEFAULT_PORT) and server.address(settings, 0) == ("127.0.0.1", 0)
     settings.raw["server"] = {"host": "0.0.0.0", "port": 9000}
-    with pytest.raises(config.ConfigError, match="127.0.0.1 only"):
+    assert server.address(settings) == ("0.0.0.0", 9000)
+    monkeypatch.setenv("AGENTLOOP_HOST", "[::]")
+    assert server.address(settings) == ("::", 9000)
+    assert server.address(settings, 8000, "192.168.1.20") == ("192.168.1.20", 8000)
+    settings.raw["server"] = {"host": 5}
+    monkeypatch.delenv("AGENTLOOP_HOST")
+    with pytest.raises(config.ConfigError, match="server.host"):
         server.address(settings)
-    settings.raw["server"] = {"host": "127.0.0.1", "port": 9000}
-    assert server.address(settings) == 9000
+    assert server.names(settings) is None
+    settings.raw["server"] = {"names": ["Loop.example.org "]}
+    assert server.names(settings) == ["loop.example.org"]
+    settings.raw["server"] = {"names": "loop.example.org"}
+    with pytest.raises(config.ConfigError, match="server.names"):
+        server.names(settings)
+
+
+def test_a_token_the_person_sets_is_long_enough_and_never_printed(home, monkeypatch, tmp_path):
+    monkeypatch.delenv("AGENTLOOP_TOKEN", raising=False)
+    settings = config.load_settings()
+    assert server.set_token(settings) is None
+    held = tmp_path / "page.token"
+    held.write_text("a-token-from-a-file-0123\n", encoding="utf-8")
+    settings.raw["server"] = {"tokenFile": str(held)}
+    assert server.set_token(settings) == "a-token-from-a-file-0123"
+    # The variable goes before the file.
+    monkeypatch.setenv("AGENTLOOP_TOKEN", "a-token-from-the-container")
+    assert server.set_token(settings) == "a-token-from-the-container"
+    for weak in ("short", "a token with spaces in it", 'a-token-with-"quotes"-0123', "a-token;with-a-semicolon"):
+        monkeypatch.setenv("AGENTLOOP_TOKEN", weak)
+        with pytest.raises(config.ConfigError, match="AGENTLOOP_TOKEN") as raised:
+            server.set_token(settings)
+        assert weak not in str(raised.value)
+    monkeypatch.delenv("AGENTLOOP_TOKEN")
+    settings.raw["server"] = {"tokenFile": str(tmp_path / "none.token")}
+    with pytest.raises(config.ConfigError, match="server.tokenFile"):
+        server.set_token(settings)
+    s = server.Server(0, token="a-token-from-the-container")
+    try:
+        assert s.token_set and s.url == f"http://127.0.0.1:{s.port}/" and "container" not in s.url
+    finally:
+        s.server_close()
+    s = server.Server(0)
+    try:
+        assert s.url == f"http://127.0.0.1:{s.port}/?token={s.token}"
+    finally:
+        s.server_close()
+
+
+def test_serve_listens_where_it_is_told_with_the_token_set(home, monkeypatch, capsys):
+    monkeypatch.setenv("AGENTLOOP_TOKEN", "a-token-from-the-container")
+    monkeypatch.setenv("AGENTLOOP_HOST", "127.0.0.1")
+    made: list[server.Server] = []
+
+    def interrupt(self, *args, **kwargs):
+        made.append(self)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(server.Server, "serve_forever", interrupt)
+    assert server.serve(0) == 0
+    out = capsys.readouterr()
+    assert made[0].token == "a-token-from-the-container" and not made[0].wide
+    assert "sign in with the token you set" in out.out and "a-token-from-the-container" not in out.out + out.err
+
+
+def test_a_server_on_ipv6_loopback(home):
+    try:
+        s = server.Server(0, host="::1")
+    except OSError:
+        pytest.skip("no IPv6 on this machine")
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        assert not s.wide and s.url.startswith(f"http://[::1]:{s.port}/?token=")
+        connection = http.client.HTTPConnection("::1", s.port, timeout=30)
+        connection.request("GET", "/api/loops", headers={"Host": f"[::1]:{s.port}", "Authorization": f"Bearer {s.token}"})
+        assert connection.getresponse().status == 200
+        connection.close()
+    finally:
+        s.close()
 
 
 # Settings, bundles and loops

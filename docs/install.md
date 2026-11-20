@@ -74,6 +74,28 @@ You start with none. Then:
 The README's "Being handed a project" says each step in full. `agentloop run <loop> --dry` checks a
 loop without spending a session.
 
+## Reaching the page from another machine
+
+The page listens on `127.0.0.1` alone unless told otherwise, and a container must be told: it
+cannot be reached on its own loopback from outside. Give the address to listen on with
+`agentloop serve --host 0.0.0.0`, the variable `AGENTLOOP_HOST`, or the settings' `server.host`.
+
+The page starts sessions that may run anything on this machine, and once it is on a network its
+token is the only thing that keeps others out. So:
+
+- **Only on a network you trust**, or behind a reverse proxy that serves it over HTTPS. Over plain
+  HTTP, anyone who can watch the network can read the token as it is sent. Behind a proxy that
+  sets `X-Forwarded-Proto: https`, the page's cookie is marked `Secure`.
+- **Set the token yourself**, so you never have to read it from the logs: `AGENTLOOP_TOKEN` (in a
+  container's settings), or a file named by the settings' `server.tokenFile`. It must be at least
+  16 characters, with no spaces, quotes, commas, semicolons or backslashes, and it should be long and
+  random. `serve` then prints the address without the token, and the page asks for it on a
+  sign-in form. A wrong token is answered at most once a second.
+- **Optionally, list the names** the page is reached by in `server.names` (`["nas.local:8765",
+  "loop.example.org"]`), and any other name is refused. Without a list, any name is let in. A page
+  on another site that points its own name at this machine (DNS rebinding) still never has the
+  cookie, so the token keeps it out.
+
 ## Upgrading
 
 Run the install line again: it installs the latest release over the one you have, and says so. By

@@ -104,7 +104,8 @@ function say(text, error) {
 
 function failed(error) {
   if (error instanceof ApiError && error.status === 401) {
-    say("The page's token has run out: open the address agentloop serve printed again.", true);
+    // The token changed under the page (the server started again with another): to the form.
+    location.assign("/signin.html");
   } else {
     say(error.message || String(error), true);
   }
