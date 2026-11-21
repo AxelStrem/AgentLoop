@@ -1,6 +1,7 @@
 # Running AgentLoop in a container
 
-Each release is also an image, for `linux/amd64` and `linux/arm64`:
+Each release is also an image, for `linux/amd64` (not ARM: an ARM image would need building on an
+ARM runner of its own):
 
 ```sh
 docker pull ghcr.io/axelstrem/agentloop:<version>     # or :latest

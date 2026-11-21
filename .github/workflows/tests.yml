@@ -2,7 +2,8 @@
 #
 # The repository is private for now, where a macOS minute costs ten Linux ones and a Windows minute
 # two. So a push to main, and a run started by hand, test on all three systems. Every other push
-# and every pull request test on Linux alone.
+# and every pull request test on Linux alone. A tag is not tested again: it names a commit the push
+# to its branch tested already. The suite runs on every core of the runner (pytest-xdist).
 #
 # The tests serve their trackers with overseer-server, which also hands tracker.py the project
 # template from the library it was built beside. Without it, most of the suite skips, and a run
@@ -15,6 +16,7 @@ name: tests
 
 on:
   push:
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -82,4 +84,4 @@ jobs:
       # seen in the log. A test still running after five minutes has hung: its stack is printed,
       # and the job's timeout ends the run.
       - name: Run the tests
-        run: python -m pytest -q -rs -o faulthandler_timeout=300
+        run: python -m pytest -q -rs -n auto -o faulthandler_timeout=300
