@@ -3,12 +3,16 @@ and the loop claiming and releasing around each session."""
 
 import json
 import os
+import re
 
 import pytest
 
 from agentloop import loop
 from test_loop import item, move, project, tracker_text  # noqa: F401 - project is a fixture
 
+
+# An item's worker field naming someone.
+NAMED = re.compile(r'^\s*- worker = "[^"]+"$', re.M)
 
 
 def with_fields(text: str, handle: str, *lines: str) -> str:
@@ -49,6 +53,32 @@ def test_a_claim_is_the_templates_button_refused_while_it_is_held(overseer, clea
     assert tracker(doc, "release", "gone").stdout.strip() == "gone: nothing to release"
     assert json.loads(tracker(doc, "claim", "alpha").stdout)["claimed"] is True
     tracker(doc, "release", "alpha")
+
+
+def test_a_claim_names_its_worker_and_a_release_takes_it_out(overseer, clean_env):
+    doc = overseer.document(tracker_text(item("alpha", "ready", complexity="low"), item("beta")))
+    tracker = overseer.tracker
+
+    claimed = tracker(doc, "claim", "alpha", "--worker", "claude-opus-5-5 (medium)")
+    assert json.loads(claimed.stdout) == {"handle": "alpha", "claimed": True}
+    text = overseer.text(doc)
+    assert "- working = true" in text and '- worker = "claude-opus-5-5 (medium)"' in text
+    # A refused claim leaves the holder's name as it is.
+    tracker(doc, "claim", "alpha", "--worker", "someone else")
+    assert '- worker = "claude-opus-5-5 (medium)"' in overseer.text(doc)
+    tracker(doc, "release", "alpha")
+    text = overseer.text(doc)
+    # The template's own "" back, or no line at all: no name either way.
+    assert "working = true" not in text and not NAMED.search(text)
+
+    # Without --worker, the session's AGENT_AUTHOR; without either, no name at all.
+    tracker(doc, "claim", "beta", env={"AGENT_AUTHOR": "claude-sonnet-5-5"})
+    assert '- worker = "claude-sonnet-5-5"' in overseer.text(doc)
+    tracker(doc, "release", "beta")
+    tracker(doc, "claim", "beta")
+    text = overseer.text(doc)
+    assert "- working = true" in text and not NAMED.search(text)
+    tracker(doc, "release", "beta")
 
 
 def test_an_item_filed_is_its_source_items_owners(overseer, clean_env):
@@ -141,8 +171,12 @@ def test_a_session_holds_its_item_and_lets_go_of_it(project, fake_claude):
            p.scene(copy_tracker(p, str(mid / "build.os")), move("alpha", "testing"), result="COMMIT: alpha: built"))
     assert p.go() == 0
     for phase in ("triage", "build"):
-        assert "            - working = true" in (mid / f"{phase}.os").read_text(encoding="utf-8")
-    assert "working = true" not in p.overseer.text(p.tracker)
+        text = (mid / f"{phase}.os").read_text(encoding="utf-8")
+        assert "            - working = true" in text
+        # The agent at work by the name that signs its comments.
+        assert NAMED.search(text)
+    final = p.overseer.text(p.tracker)
+    assert "working = true" not in final and not NAMED.search(final)
     assert p.show("alpha")["stage"] == "testing"
     assert not loop.claims_path(p.r.loop_dir).exists()
 
@@ -168,12 +202,12 @@ def test_an_item_another_loop_has_is_left_to_it(project, fake_claude, monkeypatc
     real = r.claim
     refused = []
 
-    def claim(handle):
+    def claim(handle, worker=None):
         # Another loop takes alpha between this one's next and its claim, the first time.
         if handle == "alpha" and not refused:
             refused.append(handle)
             return False
-        return real(handle)
+        return real(handle, worker)
 
     monkeypatch.setattr(r, "claim", claim)
     p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"),

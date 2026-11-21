@@ -5,8 +5,10 @@
                                                the first of those, or the signal, as JSON - or the
                                                item preferred, if it is free to take; with --owner,
                                                that user's items come before everything flagged first
-    python tracker.py claim <handle>           mark an item as an agent loop's to work - refused
-                                               if another loop has it - as JSON
+    python tracker.py claim <handle> [--worker <name>]
+                                               mark an item as an agent loop's to work - refused
+                                               if another loop has it - as JSON, with the name of
+                                               the agent at it for the page to show
     python tracker.py release <handle>         let go of it again
     python tracker.py show <handle> [--json]   one item in full, open or closed: its fields, the
                                                items around it - parent, after, what it holds up,
@@ -55,7 +57,8 @@ working on is marked working: the loop claims it once it has picked it, and rele
 session ends. queue and next leave a claimed item to the loop that holds it; the other commands do
 not refuse one, as the session working it is the one that holds it. On a server, the claim is the
 template's claim button pressed, which refuses an item already claimed: one write, so two loops
-claiming at once cannot both have it.
+claiming at once cannot both have it. The claim then writes the item's `worker` - --worker, else
+AGENT_AUTHOR - which the page shows on the item while it is worked; release takes both out.
 
 A comment names an item as <#handle>, which the page draws as the item's chip; show adds the
 item's title after it - <#handle> (Its title) - so it reads without asking, and leaves code alone.
@@ -1301,6 +1304,14 @@ def claim(t, args):
             sys.exit(f'the server refused the claim of {args.handle}: {refused}'.rstrip())
         print(json.dumps({'handle': args.handle, 'claimed': False, 'refused': TAKEN}))
         return
+    worker = args.worker or os.environ.get('AGENT_AUTHOR')
+    if worker:
+        # Only for the page to show: the press above is the claim, so a name that cannot be written
+        # leaves the item claimed all the same, and the loop is told so.
+        try:
+            t.set_field(args.handle, 'worker', worker)
+        except SystemExit as e:
+            print(f'{args.handle}: claimed, but its worker could not be written: {e}', file=sys.stderr)
     print(json.dumps({'handle': args.handle, 'claimed': True}))
 
 
@@ -1313,6 +1324,8 @@ def release(t, args):
         print(f'{args.handle}: nothing to release')
         return
     t.set_field(args.handle, 'working', None)
+    # The template's own "" back, so the row shows no name once nobody works it.
+    t.set_field(args.handle, 'worker', None)
     print(f'{args.handle}: released')
 
 
@@ -1367,7 +1380,7 @@ def main():
     command = lambda name: sub.add_parser(name, parents=[doc])
     p = command('queue'); p.add_argument('--owner')
     p = command('next'); p.add_argument('--prefer'); p.add_argument('--owner')
-    p = command('claim'); p.add_argument('handle')
+    p = command('claim'); p.add_argument('handle'); p.add_argument('--worker')
     p = command('release'); p.add_argument('handle')
     p = command('show'); p.add_argument('handle'); p.add_argument('--json', action='store_true')
     command('about')

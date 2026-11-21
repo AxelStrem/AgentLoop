@@ -616,10 +616,11 @@ class Run:
         else:
             remove(self.claims_file)
 
-    def claim(self, handle: str) -> bool | None:
-        """Marks the item as this loop's for its session: True when it is, False when another loop
-        has it already, None when tracker.py could not say."""
-        said = self.read_tracker("claim", handle)
+    def claim(self, handle: str, worker: str | None = None) -> bool | None:
+        """Marks the item as this loop's for its session, with `worker` - who works it - for the
+        page to show: True when it is, False when another loop has it already, None when tracker.py
+        could not say."""
+        said = self.read_tracker("claim", handle, *(("--worker", worker) if worker else ()))
         if not said:
             return None
         if not said.get("claimed"):
@@ -965,8 +966,12 @@ class Run:
         self.went_on_from = from_
         self.suggested = None
         self.taken = None
+        # What signs the comments the session adds to the tracker: the name it was started with,
+        # since which model that stands for is known only once the session says. The claim shows
+        # it on the item too, as the agent at work.
+        author = signature(route["model"], route)
         # Claimed once the snapshot is taken, and let go of before the commit.
-        held = self.claim(item["handle"])
+        held = self.claim(item["handle"], author)
         if held is None:
             self.say(f"tracker.py could not claim {item['handle']}. Stopping.", "Red")
             return False
@@ -975,11 +980,10 @@ class Run:
             self.say(f"  {item['handle']}: another loop is working on it - left to it.", "DarkYellow")
             return True
         self._status(item=item["handle"], title=item.get("title"), kind=kind, session=session_id)
-        # What signs the comments the session adds to the tracker: the name it was started with,
-        # since which model that stands for is known only once the session says. And where an item
-        # it files into another project came from.
+        # The session's variables: that author, and where an item it files into another project
+        # came from.
         self.variables = session.session_variables(
-            author=signature(route["model"], route), scratch=self.scratch, tracker=self.tracker,
+            author=author, scratch=self.scratch, tracker=self.tracker,
             item=f"{Path(self.tracker).stem}:{item['handle']}", claude=self.worker.claude,
             overseer=self.overseer, sign_in=self.worker.sign_in, project_env=self.project_env,
         )
