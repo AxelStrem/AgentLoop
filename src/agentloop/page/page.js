@@ -929,8 +929,8 @@ async function editLoop(name, problems, copyOf) {
   const draw = () => {
     const bundle = raw.tracker ? (shown && shown.definition) : state.bundles.find((b) => b.name === project.value);
     worker.replaceChildren(...(state.settings.workers || []).map((w) => h("option", {
-      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer,
-    }, w.name + (!w.overseer ? " (no server)" : ""))));
+      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer && !raw.overseer,
+    }, w.name + (!w.overseer && !raw.overseer ? " (no server)" : ""))));
     placesBox.replaceChildren();
     if (bundle) {
       placesBox.append(h("h3", { text: "Where each repository is on this machine" }));
@@ -1201,6 +1201,12 @@ async function addFromTracker() {
   openEditor("A loop from a tracker", body, save, []);
 }
 
+// The server a loop names itself, a copy taking its original's (config.overseer_for): with one, its
+// worker needs none.
+function ownServer(loop, base) {
+  return "overseer" in loop ? loop.overseer : (base && base.overseer) || null;
+}
+
 // A copy of a loop: its name and its repositories' folders asked for, everything else the
 // original's unless set here.
 function editCopy(name, raw, base, problems) {
@@ -1214,8 +1220,8 @@ function editCopy(name, raw, base, problems) {
   const worker = h("select", {},
     h("option", { value: "", selected: raw.worker === undefined }, `as ${base.name}: ${base.worker}`),
     (state.settings.workers || []).map((w) => h("option", {
-      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer,
-    }, w.name + (!w.overseer ? " (no server)" : ""))));
+      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer && !ownServer(raw, base),
+    }, w.name + (!w.overseer && !ownServer(raw, base) ? " (no server)" : ""))));
   const greyed = () => worker.classList.toggle("copied", worker.value === "");
   worker.addEventListener("change", greyed);
   greyed();
@@ -1320,9 +1326,12 @@ function drawWorkers() {
   const found = $("found");
   found.replaceChildren();
   const accounts = state.accounts;
+  const loops = state.settings.loops || [];
+  const original = (l) => (l.like ? loops.find((o) => o.name === l.like) : null);
   for (const worker of state.settings.workers || []) {
     const said = accounts ? accounts.workers.find((w) => w.name === worker.name) : null;
     const overseer = worker.overseer || {};
+    const stranded = loops.filter((l) => (l.worker || (original(l) || {}).worker) === worker.name && !ownServer(l, original(l))).map((l) => l.name);
     const login = said ? said.login.line : "asking claude...";
     box.append(h("div", { class: "card" },
       h("div", { class: "head" },
@@ -1337,7 +1346,9 @@ function drawWorkers() {
       h("div", { class: "usage c-darkcyan mono", "data-worker": worker.name, text: usageText(said && said.usage) }),
       worker.manager ? h("div", { class: "sub" }, "manager ", h("span", { class: "mono", text: worker.manager }), ": its loops take their items first") : null,
       worker.overseer ? h("div", { class: "sub" }, "server ", h("span", { class: "mono", text: overseer.server || "" }),
-        ", key file ", h("span", { class: "mono", text: overseer.keyFile || "" })) : h("div", { class: "problem", text: "no server: it cannot run a loop, as every tracker is on one" })));
+        ", key file ", h("span", { class: "mono", text: overseer.keyFile || "" }))
+        : stranded.length ? h("div", { class: "problem", text: `no server: ${stranded.join(", ")} ${stranded.length === 1 ? "reaches its tracker" : "reach their trackers"} through this worker, and cannot run` })
+        : h("div", { class: "sub", text: "no server of its own: each of its loops names one, as a loop added from a tracker's whole address does" })));
   }
   if (accounts && accounts.found.length) {
     found.append(h("p", { class: "note", text: "Claude folders on this machine that no worker names yet:" }));
