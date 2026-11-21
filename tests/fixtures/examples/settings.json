@@ -43,7 +43,7 @@
       "settings": {}
     }
   ],
-  "defaults": {"stopAtWeeklyUse": 0.9},
+  "defaults": {"askEveryMinutes": 60},
   "install": null,
   "server": {"host": "127.0.0.1", "port": 8765}
 }

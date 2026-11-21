@@ -178,10 +178,10 @@ def test_command_writes_install_and_then_uses_it(as_source, tmp_path, home, caps
 
 
 def test_command_keeps_the_other_settings(as_source, tmp_path, home):
-    config.save_settings({**config.empty_settings(), "defaults": {"stopAtWeeklyUse": 0.9}, "later": 1})
+    config.save_settings({**config.empty_settings(), "defaults": {"askEveryMinutes": 60}, "later": 1})
     assert build.run(str(tmp_path / "out")) == 0
     settings = json.loads((home / "config" / "settings.json").read_text(encoding="utf-8"))
-    assert settings["defaults"] == {"stopAtWeeklyUse": 0.9} and settings["later"] == 1
+    assert settings["defaults"] == {"askEveryMinutes": 60} and settings["later"] == 1
 
 
 def test_command_reports_a_refusal_without_a_traceback(as_source, tmp_path, home, capsys):

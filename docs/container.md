@@ -106,7 +106,7 @@ uses. They name the variable a secret is in, and never show the secret.
 - **An API key** from the Claude Console, named in the worker's `signIn` as `{"apiKey":
   "ANTHROPIC_KEY_MAIN"}`, reaches its sessions as `ANTHROPIC_API_KEY`. **It is billed per use,
   for every token, not from a subscription.** It has no five-hour or weekly limit, so the usage
-  line says "billed per use" and `stopAtWeeklyUse` never stops it. An API error, such as a rate
+  line says "billed per use" and the worker's limits never pause it. An API error, such as a rate
   limit or a spent balance, ends the session as a failed one. The loop does not wait it out.
 
 A worker whose variable is not set is refused when its loop starts, and the error names the
