@@ -187,7 +187,8 @@ jobs:
           [ "$(answer -X POST -H 'Content-Type: application/json' --data '{"token": "not-the-token-at-all"}' "$page/api/signin")" = "401" ] || fail "a wrong token was not refused"
           [ "$(answer -H "Authorization: Bearer $token" "$page/api/loops")" = "200" ] || fail "the API refused the token"
           # Run as the user, not as root: Claude Code refuses its sessions' flag as root.
-          uid="$(docker top agentloop-try -eo uid,args | awk '/agentloop serve/ && !/tini/ {print $1; exit}')"
+          # docker top needs a pid column, or it refuses the ps options.
+          uid="$(docker top agentloop-try -eo pid,uid,args | awk '/agentloop serve/ && !/tini/ {print $2; exit}')"
           [ "$uid" = "99" ] || fail "serve runs as uid '$uid', not 99"
           [ "$(stat -c %u "$data/home")" = "99" ] || fail "/data/home does not belong to 99"
           for tool in "claude --version" "git --version" "node --version" "agentloop --version"; do
