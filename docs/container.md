@@ -75,7 +75,7 @@ The template is not in Community Applications; adding it by its address is all i
 - **An SSH key** for git goes in `/data/home/.ssh` (the key, and a `known_hosts` beside it), mode
   600, owned by `PUID`.
 - **System packages:** the image has git, Node, `claude`, a compiler and linker
-  (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, and the libraries headless Chrome
+  (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, `unzip`, and the libraries headless Chrome
   needs.
 - **A project's tools** come from the `Brewfile` in its first repository, installed as the user
   into the Homebrew volume before each session; a session adds to it itself (see
