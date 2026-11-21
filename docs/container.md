@@ -9,13 +9,16 @@ docker pull ghcr.io/axelstrem/agentloop:<version>     # or :latest
 It runs `agentloop serve` on port 8765, listening on the network, so set `AGENTLOOP_TOKEN` (see
 "Reaching the page from another machine" in [install.md](install.md)). Everything AgentLoop keeps
 goes in the volume `/data`: settings, logs, the workers' Claude folders, key files, each project's
-tools, and the user's home folder (`/data/home`), so a new image keeps it all.
+tools, and the user's home folder (`/data/home`), so a new image keeps it all. Homebrew, and every
+tool the projects' Brewfiles install, goes in a second volume, `/home/linuxbrew/.linuxbrew`,
+shared by all projects. It is a volume of its own because Homebrew's bottles work only at that path.
 
 ## docker run
 
 ```sh
 docker run -d --name agentloop -p 8765:8765 \
   -v /path/on/host/agentloop:/data \
+  -v /path/on/host/agentloop-brew:/home/linuxbrew/.linuxbrew \
   -v /path/on/host/code:/code \
   -e AGENTLOOP_TOKEN=<16+ random characters> \
   -e CLAUDE_CODE_OAUTH_TOKEN=<from claude setup-token> \
@@ -25,28 +28,9 @@ docker run -d --name agentloop -p 8765:8765 \
 
 ## Compose
 
-The same, as `compose.yaml`:
-
-```yaml
-services:
-  agentloop:
-    image: ghcr.io/axelstrem/agentloop:latest
-    container_name: agentloop
-    restart: unless-stopped
-    ports:
-      - "8765:8765"
-    volumes:
-      - /path/on/host/agentloop:/data
-      - /path/on/host/code:/code
-    environment:
-      AGENTLOOP_TOKEN: "<16+ random characters>"
-      CLAUDE_CODE_OAUTH_TOKEN: "<from claude setup-token>"
-      GIT_USER_NAME: "Your Name"
-      GIT_USER_EMAIL: "you@example.org"
-```
-
-Keep the secrets in an `.env` file beside it (`AGENTLOOP_TOKEN: ${AGENTLOOP_TOKEN}`), not in a file
-you commit.
+The same is [`docker/compose.yaml`](../docker/compose.yaml), with Unraid's paths: copy it, change
+the paths and git's name, and put the secrets in an `.env` file beside it, as its header says.
+`docker compose up -d` in that folder starts it.
 
 ## Unraid
 
@@ -59,7 +43,9 @@ that turns the variables below into a form:
 2. **Add Container**, and pick **agentloop** from the template list.
 3. Fill in the form: the **AGENTLOOP_TOKEN** (16 or more characters, long and random) and the
    Claude sign-in (below) are the ones that matter. `PUID` and `PGID` are already Unraid's `99` and
-   `100`. The data folder defaults to `/mnt/user/appdata/agentloop`.
+   `100`. The data folder defaults to `/mnt/user/appdata/agentloop`, and Homebrew's to
+   `/mnt/user/appdata/agentloop-brew`. Homebrew is many small files and symlinks: with appdata on a
+   cache pool, give it `/mnt/cache/appdata/agentloop-brew`, past Unraid's slower user-share layer.
 4. For each repository a loop works on, use **Add another Path, Port, Variable...**, choose
    **Path**, and give a container path (`/code/orchard`) and the host folder that holds the clone.
    Name that container path in the loop's places.
@@ -73,7 +59,8 @@ The template is not in Community Applications; adding it by its address is all i
 |---|---|
 | `AGENTLOOP_TOKEN` | the page's sign-in token. Without it, a new one is printed in the container's log at each start |
 | `PUID`, `PGID` | the user and group that serve, the loops and their sessions run as; 99 and 100 (Unraid's) when unset. Never 0: Claude Code refuses to run its sessions as root. Give the ids that own your clones |
-| `EXTRA_PACKAGES` | Debian packages a project needs beyond the image's, space-separated, installed at each start |
+| `EXTRA_PACKAGES` | Debian packages a project needs beyond the image's, space-separated, installed at each start. A Brewfile is the better home for a tool |
+| `AGENTLOOP_BREW` | `1` in the image: projects' tools come from their Brewfiles ([settings.md](settings.md), "Its Brewfile"). Anything else turns that off |
 | `GIT_USER_NAME`, `GIT_USER_EMAIL` | git's name and email for the loops' commits |
 | `GIT_TOKEN` | a token for HTTPS remotes, kept in `/data/home/.git-credentials`, readable by the user alone. `GIT_TOKEN_HOST` (`github.com`) and `GIT_TOKEN_USER` (`x-access-token`) say what it is for |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude's sign-in for every worker with no `signIn`; see "Signing in to Claude" below |
@@ -86,7 +73,13 @@ The template is not in Community Applications; adding it by its address is all i
   600, owned by `PUID`.
 - **System packages:** the image has git, Node, `claude`, a compiler and linker
   (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, and the libraries headless Chrome
-  needs. A project's setup script installs the rest as the user, into its own folder under `/data`.
+  needs.
+- **A project's tools** come from the `Brewfile` in its first repository, installed as the user
+  into the Homebrew volume before each session; a session adds to it itself (see
+  [settings.md](settings.md), "Its Brewfile"). The first start fills an empty volume from the
+  image's copy of Homebrew. Brew's `bin` comes first on PATH, so a brewed `node` or `python3` wins
+  for sessions; `claude` itself always runs on the image's Node. Without that volume mounted, the log
+  says so at each start, and what brew installed is lost when the container is recreated.
 - **Started with `--user`**, the image skips all of the above and runs serve as that user.
 
 ## Signing in to Claude
@@ -121,4 +114,5 @@ variable. Nothing of the token or key is written to the settings, the logs or th
 changes left uncommitted in the clone, as after a kill. The new container's serve
 (`agentloop serve --restart-loops`) starts again each loop that was cut off. A loop you had stopped
 stays stopped. Each one lets go of the item its last run claimed, and picks from the queue again.
-Settings, logins and each project's tools are in `/data`, so they are still there.
+Settings, logins and each project's tools are in `/data` and the Homebrew volume, so they are
+still there.

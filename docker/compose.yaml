@@ -1,0 +1,27 @@
+# AgentLoop under Docker Compose (docs/container.md). The paths are Unraid's; change them for
+# another host. The secrets come from a .env file beside this one, never written here:
+#
+#   AGENTLOOP_TOKEN=<16+ random characters>
+#   CLAUDE_CODE_OAUTH_TOKEN=<from claude setup-token>
+#   GIT_TOKEN=<optional, for HTTPS pushes>
+services:
+  agentloop:
+    image: ghcr.io/axelstrem/agentloop:latest
+    container_name: agentloop
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - /mnt/user/appdata/agentloop:/data
+      # Homebrew and every project's tools, shared by all projects; its own volume, at this path.
+      - /mnt/cache/appdata/agentloop-brew:/home/linuxbrew/.linuxbrew
+      # One line per repository a loop works on; name the container path in the loop's places.
+      - /mnt/user/code/orchard:/code/orchard
+    environment:
+      PUID: "99"
+      PGID: "100"
+      AGENTLOOP_TOKEN: ${AGENTLOOP_TOKEN}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
+      GIT_USER_NAME: "Your Name"
+      GIT_USER_EMAIL: "you@example.org"
+      GIT_TOKEN: ${GIT_TOKEN:-}

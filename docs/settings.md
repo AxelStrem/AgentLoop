@@ -170,6 +170,25 @@ if (-not (Test-Path "$env:CARGO_HOME/bin/cargo.exe")) {
 Set-Content -Encoding utf8 "$env:AGENTLOOP_PROJECT_ENV/session-env.txt" "PATH={env}/cargo/bin`nCARGO_HOME={env}/cargo`nRUSTUP_HOME={env}/rustup"
 ```
 
+### Its Brewfile
+
+On a machine where `AGENTLOOP_BREW` is `1`, which the container image sets (item `brew-tools`),
+a project's tools come from Homebrew, listed in a `Brewfile` at the top of its first repository, in
+Homebrew's own format (`brew "jq"`, `brew "node@22"`). Homebrew itself is the machine's, one prefix
+shared by every project (in the container, a volume: [container.md](container.md)).
+
+| | |
+| --- | --- |
+| Before each session | `brew bundle check`; when something is missing, `brew bundle install --no-upgrade --file=<Brewfile>`, its output in the loop's |
+| A session that needs a tool | adds its line to the Brewfile and runs that same install itself, then goes on; the loop commits the Brewfile with its work |
+| `brew install`, `upgrade`, `tap`, `uninstall` | refused by the guard, so the Brewfile stays the one record |
+| An install that fails | the loop does not start, and says so; fix the Brewfile and start it again |
+| No Brewfile | nothing is installed; the session is still told how to start one |
+
+Anywhere `AGENTLOOP_BREW` is not `1` (a person's own Mac or Windows PC), none of this runs and
+sessions are not told of it. It is never on for Windows. It runs after the setup script, which a
+project may still have for what Homebrew does not give.
+
 ### The copy a loop keeps
 
 Each loop keeps the definition it last read in `loops/<loop>/definition.json` (the tracker, a
@@ -528,7 +547,8 @@ remove it.
 `system.md` holds a "Where you are" section after `AUTOTASK.md`: the OS, the shell the Bash tool
 runs (and on Windows the PowerShell tool), the Python to run the tools with, the app's tools
 folder, the project's tools folder, and each repository's and place's name with its folder on this
-PC. `AUTOTASK-windows.md` is added after `AUTOTASK.md` on Windows only.
+PC. `AUTOTASK-windows.md` is added after `AUTOTASK.md` on Windows only. Where Homebrew is on, it
+also names the project's Brewfile and how to add a tool to it (see "Its Brewfile").
 
 Where `AUTOTASK.md` or the definition's description writes `{name}`, it is filled in with this
 machine's value, with forward slashes: `{tools}` the app's tools folder (`{tools}/tracker.py`),

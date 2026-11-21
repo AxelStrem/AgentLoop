@@ -13,6 +13,8 @@
 #   GIT_TOKEN          a token for HTTPS remotes, kept in ~/.git-credentials (mode 600)
 #   GIT_TOKEN_HOST     the host it is for; github.com when unset
 #   GIT_TOKEN_USER     the user name sent with it; x-access-token when unset, which GitHub takes
+#   AGENTLOOP_BREW     1 (the image's): Homebrew at its prefix, filled from the image's copy when
+#                      empty, and given to the user (item brew-tools)
 #
 # An SSH key needs nothing here: put it in /data/home/.ssh, with a known_hosts beside it.
 # No secret is printed.
@@ -64,6 +66,24 @@ if [ "$(stat -c %u /data)" != "$PUID" ]; then
     chown -R "$PUID:$PGID" /data
 fi
 chown "$PUID:$PGID" "$HOME"
+
+# Homebrew's prefix is a volume of its own, shared by every project. It is filled once, and given
+# whole to the user when PUID changes, as /data is; brew refuses to run as root.
+if [ "${AGENTLOOP_BREW:-}" = "1" ]; then
+    prefix="${HOMEBREW_PREFIX:-/home/linuxbrew/.linuxbrew}"
+    mkdir -p "$prefix"
+    if command -v mountpoint >/dev/null && ! mountpoint -q "$prefix"; then
+        say "$prefix is not a volume: what Homebrew installs is lost when the container is recreated"
+    fi
+    if [ ! -x "$prefix/bin/brew" ]; then
+        say "putting Homebrew in $prefix"
+        cp -a /opt/homebrew-seed/. "$prefix/"
+        chown -R "$PUID:$PGID" "$prefix"
+    elif [ "$(stat -c %u "$prefix")" != "$PUID" ]; then
+        say "$prefix belongs to another user: giving it to $PUID:$PGID"
+        chown -R "$PUID:$PGID" "$prefix"
+    fi
+fi
 
 as_user() { gosu "$PUID:$PGID" env HOME="$HOME" "$@"; }
 

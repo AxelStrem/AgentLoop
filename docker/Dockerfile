@@ -24,7 +24,15 @@ RUN apt-get update \
       libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
       libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
       fonts-liberation \
+      procps file \
  && rm -rf /var/lib/apt/lists/*
+
+# Homebrew, the one way a project's tools are installed here (item brew-tools). It lives in a volume
+# at its default prefix, where its bottles work; the entrypoint fills an empty one from this copy.
+# procps and file above are what Homebrew needs on Linux beyond the compiler, git and curl.
+RUN git clone --quiet https://github.com/Homebrew/brew /opt/homebrew-seed/Homebrew \
+ && mkdir -p /opt/homebrew-seed/bin /home/linuxbrew/.linuxbrew \
+ && ln -s ../Homebrew/bin/brew /opt/homebrew-seed/bin/brew
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
@@ -32,6 +40,15 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && npm install -g @anthropic-ai/claude-code \
  && npm cache clean --force
+
+# Brew's bin comes first on PATH, so a project's Brewfile may install a node of its own: claude,
+# when it is a node script, is pinned to this image's node instead of whichever is first.
+RUN target="$(readlink -f /usr/local/bin/claude)" \
+ && if head -n 1 "$target" | grep -q '^#!.*node'; then \
+      rm /usr/local/bin/claude \
+      && printf '#!/bin/sh\nexec /usr/local/bin/node %s "$@"\n' "$target" > /usr/local/bin/claude \
+      && chmod 755 /usr/local/bin/claude; \
+    fi
 
 # The release's wheel: the image carries the version it is tagged with.
 COPY dist/*.whl /tmp/wheels/
@@ -50,6 +67,16 @@ ENV AGENTLOOP_HOME=/data \
     DISABLE_AUTOUPDATER=1 \
     PUID=99 \
     PGID=100
+# What `brew shellenv` would set, and brew's own update at most once a day rather than before every
+# install.
+ENV AGENTLOOP_BREW=1 \
+    HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew \
+    HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar \
+    HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew \
+    HOMEBREW_AUTO_UPDATE_SECS=86400 \
+    HOMEBREW_NO_ANALYTICS=1 \
+    HOMEBREW_NO_ENV_HINTS=1 \
+    PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 VOLUME /data
 EXPOSE 8765
 

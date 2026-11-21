@@ -10,7 +10,8 @@
 #
 # The container image (item docker-image, docker/Dockerfile) is built from the same wheel and tried:
 # started with an empty /data and a token, the page must send a visitor to its sign-in, take the
-# token and refuse a wrong one, run as the user 99 and not as root, and end at once on docker stop.
+# token and refuse a wrong one, run as the user 99 and not as root, install a Brewfile's jq as that
+# user (item brew-tools), and end at once on docker stop.
 # On a tag it is pushed to ghcr.io/<owner>/agentloop as :<version> and :latest, for linux/amd64 and
 # linux/arm64, and the release's notes say how to pull it.
 #
@@ -191,9 +192,13 @@ jobs:
           uid="$(docker top agentloop-try -eo pid,uid,args | awk '/agentloop serve/ && !/tini/ {print $2; exit}')"
           [ "$uid" = "99" ] || fail "serve runs as uid '$uid', not 99"
           [ "$(stat -c %u "$data/home")" = "99" ] || fail "/data/home does not belong to 99"
-          for tool in "claude --version" "git --version" "node --version" "agentloop --version"; do
+          for tool in "claude --version" "git --version" "node --version" "agentloop --version" "brew --version"; do
             docker exec -u 99:100 -e HOME=/data/home agentloop-try $tool || fail "$tool did not run as the user"
           done
+          # A Brewfile's tools install as the user, from a bottle, into Homebrew's prefix.
+          docker exec -u 99:100 -e HOME=/data/home agentloop-try sh -c \
+            'cd /data/home && echo "brew \"jq\"" > Brewfile && brew bundle install --no-upgrade --file=Brewfile && jq --version' \
+            || fail "a Brewfile's jq did not install as the user"
           # docker stop reaches serve through tini, and serve ends on it rather than being killed
           # after docker's 10 s.
           started="$(date +%s)"

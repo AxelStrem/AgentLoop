@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from agentloop import config, tools
+from agentloop import brew, config, tools
 
 
 class SessionError(Exception):
@@ -143,12 +143,14 @@ def placeholders(bundle: Path | None, folders: dict[str, Path], places: dict[str
 
 
 def where_you_are(bundle: Path | None, folders: dict[str, Path], places: dict[str, Path],
-                  about: dict[str, str] | None = None, fetched: bool = False, project_env: Path | None = None) -> str:
+                  about: dict[str, str] | None = None, fetched: bool = False, project_env: Path | None = None,
+                  brewfile: Path | None = None) -> str:
     """The section of system.md that tells a session the machine it is on, the same for every
     session of a run. `about` is what the project says each repository and place is, beside its
     folder where it says it. `fetched` when `bundle` is the folder a tracker's project had its
     tools fetched into (item tools-fetch), not a bundle. `project_env` is the folder the project's
-    setup script installed its tools in (item project-setup), when it ran."""
+    setup script installed its tools in (item project-setup), when it ran. `brewfile` is the
+    project's Brewfile, on a machine that has Homebrew on for its sessions (item brew-tools)."""
     values = placeholders(bundle, folders, places)
     about = about or {}
     here = config.this_system()
@@ -176,6 +178,11 @@ def where_you_are(bundle: Path | None, folders: dict[str, Path], places: dict[st
         *([f"- **The project's own tools,** installed by its setup script: `{_slashes(project_env)}`. What it put in "
             f"front of PATH, and the variables it set, are in this session's environment already; `{_slashes(project_env)}/"
             "session-env.txt` lists them."] if project_env is not None else []),
+        *([f"- **Installing a tool:** only through Homebrew and the project's Brewfile, `{_slashes(brewfile)}`, which "
+           "the loop installs before each session and commits with your work. To add one, add its line there "
+           f"(`brew \"jq\"`) and run `{' '.join(brew.install_command(brewfile))}`, then go on. "
+           "Never `brew install` directly - the guard refuses it - and there is no root: apt and sudo do not work."]
+          if brewfile is not None else []),
         "- **Repositories:**",
         *(folder(name) for name in folders),
     ]

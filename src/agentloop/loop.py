@@ -83,7 +83,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-from agentloop import accounts, colours, commits, config, definition, session, setup, sync, tools, usage, watch
+from agentloop import accounts, brew, colours, commits, config, definition, session, setup, sync, tools, usage, watch
 
 # The pause between clean iterations, in seconds.
 COOLDOWN = 5
@@ -1231,7 +1231,8 @@ class Run:
             # lists any, stand in for one (item tools-fetch).
             where=session.where_you_are(self.bundle.folder or self.bundle.files, folders, places, self.bundle.about,
                                         fetched=self.bundle.folder is None,
-                                        project_env=setup.env_dir(self.project) if self.project_env is not None else None),
+                                        project_env=setup.env_dir(self.project) if self.project_env is not None else None,
+                                        brewfile=brew.brewfile(self.workdir) if brew.enabled() else None),
             values=session.placeholders(self.bundle.folder or self.bundle.files, folders, places),
         )
         session.write_session_settings(self.session_settings)
@@ -1308,6 +1309,8 @@ class Run:
                 # The project's tools, set up before its first session and whenever the accepted
                 # definition's setup script changes (item project-setup).
                 ended = self._setup()
+            if ended is None:
+                ended = self._brew()
             if ended is not None:
                 status = ended
                 break
@@ -1568,6 +1571,30 @@ class Run:
             self.say(f" {self.project} is set up already, by this {tool['file']}.", "Green")
             return 0
         return self._setup() or 0
+
+    def _brew(self) -> int | None:
+        """Before a session, where Homebrew is on (item brew-tools): what the first repository's
+        Brewfile lists and is not installed yet, installed. None to go on; 1 when brew failed."""
+        file = brew.brewfile(self.workdir)
+        if not brew.enabled() or not file.is_file():
+            return None
+        try:
+            if brew.satisfied(file):
+                return None
+            self.say(f" Installing what {_slashes(file)} lists, with Homebrew.", "Cyan")
+            self._status(state="setting-up")
+            brew.install(file, lambda line: self.say(f"  {line}", "DarkGray"), on_start=self._setup_started)
+            self.say(f" {self.project}'s Brewfile is installed.", "Green")
+            self._status(state="running")
+        except (brew.BrewError, OSError) as error:
+            if isinstance(error, OSError):
+                error = type(error).__name__
+            self.say(f" Installing {self.project}'s Brewfile failed: {error}. No session runs until it succeeds: put "
+                     "the Brewfile right, then start the loop again.", "Red")
+            return 1
+        finally:
+            remove(self.state_file)
+        return None
 
     def _setup_started(self, process: subprocess.Popen) -> None:
         """running.json for the setup script, as for a session's claude, so that a kill ends it at once."""
