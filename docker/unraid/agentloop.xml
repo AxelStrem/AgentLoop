@@ -11,7 +11,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/AxelStrem/AgentLoop/issues</Support>
   <Project>https://github.com/AxelStrem/AgentLoop</Project>
-  <Overview>AgentLoop runs Claude sessions on the items of an Overseer project tracker, one after another, with a web page to start and watch them. Set AGENTLOOP_TOKEN, which signs in to the page, and a Claude sign-in (CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token`). To give a loop its repositories, use "Add another Path" once for each clone: a container path such as /code/orchard, and the host folder that holds it. Name that container path in the loop's places on the page. See docs/container.md in the repository.</Overview>
+  <Overview>AgentLoop runs Claude sessions on the items of an Overseer project tracker, one after another, with a web page to start and watch them. Set AGENTLOOP_TOKEN, which signs in to the page, and a Claude sign-in (CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token`). Every repository goes in the one Code folder (/code in the container): Clone here on the page clones each into /code/&lt;repo&gt;. See docs/container.md in the repository.</Overview>
   <Category>Tools:</Category>
   <WebUI>http://[IP]:[PORT:8765]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/AxelStrem/AgentLoop/main/docker/unraid/agentloop.xml</TemplateURL>
@@ -22,6 +22,8 @@
   <Requires/>
   <Config Name="Web page" Target="8765" Default="8765" Mode="tcp" Description="The port of AgentLoop's page, which asks for AGENTLOOP_TOKEN." Type="Port" Display="always" Required="true" Mask="false">8765</Config>
   <Config Name="Data" Target="/data" Default="/mnt/user/appdata/agentloop" Mode="rw" Description="Everything AgentLoop keeps: settings, logs, Claude logins, key files, each project's tools and the user's home folder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/agentloop</Config>
+  <Config Name="Code" Target="/code" Default="/mnt/user/code" Mode="rw" Description="The one folder every project's repositories are cloned into, each under its name: Clone here on the page offers /code/&lt;repo&gt;. Its files are never chowned; give PUID the id that owns them." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/code</Config>
+  <Config Name="AGENTLOOP_CODE" Target="AGENTLOOP_CODE" Default="/code" Mode="" Description="The folder in the container that repositories are offered to be cloned under; the Code path's container side." Type="Variable" Display="advanced" Required="false" Mask="false">/code</Config>
   <Config Name="Homebrew" Target="/home/linuxbrew/.linuxbrew" Default="/mnt/user/appdata/agentloop-brew" Mode="rw" Description="Homebrew and every tool the projects' Brewfiles install, shared by all projects and kept across restarts and updates. Many small files: on a cache pool, /mnt/cache/appdata/agentloop-brew is faster." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/agentloop-brew</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="The user id the loops and their sessions run as; 99 is Unraid's nobody. Never 0. Give the id that owns your clones." Type="Variable" Display="always" Required="true" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="The group id the loops and their sessions run as; 100 is Unraid's users." Type="Variable" Display="always" Required="true" Mask="false">100</Config>

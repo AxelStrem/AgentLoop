@@ -224,7 +224,9 @@ flag still needed and saves nothing.
 
 A repository the definition gives an address, its `url` and maybe a `branch` (item `clone`), shows
 that address beside its folder, and the folder is offered: beside the folder given for another of
-the project's repositories, else `<home>/<project>/<repo>` under this machine's home. **Clone here**
+the project's repositories, else `<AGENTLOOP_CODE>/<repo>` where that variable names the machine's
+one folder of clones (the container's `/code`), else `<home>/<project>/<repo>` under this machine's
+home. **Clone here**
 clones it into that folder when the folder is missing or empty, and uses it as it is when it is a
 clone of that address already, over https or ssh alike. A folder holding anything else is refused,
 by name, and nothing in it is touched. The clone is the person's own git with their own

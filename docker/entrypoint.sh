@@ -13,6 +13,8 @@
 #   GIT_TOKEN          a token for HTTPS remotes, kept in ~/.git-credentials (mode 600)
 #   GIT_TOKEN_HOST     the host it is for; github.com when unset
 #   GIT_TOKEN_USER     the user name sent with it; x-access-token when unset, which GitHub takes
+#   AGENTLOOP_CODE     /code (the image's): the folder every repository is cloned under; given to
+#                      the user when root owns it, as a new mount does, and nothing inside it
 #   AGENTLOOP_BREW     1 (the image's): Homebrew at its prefix, filled from the image's copy when
 #                      empty, and given to the user (item brew-tools)
 #
@@ -66,6 +68,13 @@ if [ "$(stat -c %u /data)" != "$PUID" ]; then
     chown -R "$PUID:$PGID" /data
 fi
 chown "$PUID:$PGID" "$HOME"
+
+# A mount docker made for the clones is root's, where the user could not clone; only the folder
+# itself is given, so a clone inside keeps whoever owns it.
+code="${AGENTLOOP_CODE:-}"
+if [ -n "$code" ] && [ -d "$code" ] && [ "$(stat -c %u "$code")" = "0" ]; then
+    chown "$PUID:$PGID" "$code"
+fi
 
 # Homebrew's prefix is a volume of its own, shared by every project. It is filled once, and given
 # whole to the user when PUID changes, as /data is; brew refuses to run as root.

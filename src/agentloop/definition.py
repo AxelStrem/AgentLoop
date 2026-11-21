@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from agentloop import config
+from agentloop import clones, config
 
 # Where the definition is, read through the tracker: the mount `definition` in `project`, then the
 # definition document's own root (overseer:project-definition).
@@ -891,9 +891,9 @@ def preview(settings: config.Settings, address: str, key_file: str | None, worke
         "systemProblem": system_problem,
         "repos": raw["repos"],
         "places": raw.get("places") or [],
-        # This machine's home, for the folder a repository with an address is offered to be cloned
-        # into: `<home>/<project>/<repo>` (item clone).
-        "home": Path.home().as_posix(),
+        # The folder a repository with an address is offered to be cloned under, as
+        # `<clones>/<repo>` (item clone).
+        "clones": clones.base(found.name).as_posix(),
         "settings": raw.get("settings") or {},
         # The project's tools, each with whether it is for this machine's system and so fetched
         # when the loop is added (item tools-fetch).

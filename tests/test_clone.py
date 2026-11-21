@@ -119,17 +119,28 @@ def test_a_clone_that_fails_says_which_repository_and_stops(tmp_path):
 
 
 def test_the_folder_offered_is_beside_the_others_or_under_home(tmp_path):
-    assert clones.default_folder(tmp_path, "proj", "docs") == tmp_path / "proj" / "docs"
-    assert clones.default_folder(tmp_path, "proj", "docs", ["", str(tmp_path / "src" / "code")]) == tmp_path / "src" / "docs"
+    assert clones.default_folder(tmp_path / "proj", "docs") == tmp_path / "proj" / "docs"
+    assert clones.default_folder(tmp_path / "proj", "docs", ["", str(tmp_path / "src" / "code")]) == tmp_path / "src" / "docs"
+
+
+def test_one_folder_of_clones_is_shared_by_every_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    assert clones.base("proj", {}) == tmp_path / "home" / "proj"
+    assert clones.base("proj", {clones.CODE: "  "}) == tmp_path / "home" / "proj"
+    assert clones.base("proj", {clones.CODE: str(tmp_path / "code")}) == tmp_path / "code"
+    assert clones.base("other", {clones.CODE: str(tmp_path / "code")}) == tmp_path / "code"
 
 
 # The definition
 
-def test_the_definition_gives_a_repositorys_address_and_branch(machine, overseer, origin):
+def test_the_definition_gives_a_repositorys_address_and_branch(machine, overseer, origin, monkeypatch):
+    monkeypatch.delenv(clones.CODE, raising=False)
     tracker = served(overseer, item("alpha"), repos=repos(str(origin), "other"))
     shown = definition.preview(config.load_settings(), address(overseer, tracker), None, "w")
     assert shown["repos"] == [{"name": "code", "about": "The code"}, {"name": "docs", "url": str(origin), "branch": "other"}]
-    assert shown["home"] == Path.home().as_posix()
+    assert shown["clones"] == (Path.home() / shown["project"]).as_posix()
+    monkeypatch.setenv(clones.CODE, "/code")
+    assert definition.preview(config.load_settings(), address(overseer, tracker), None, "w")["clones"] == "/code"
 
 
 # The page's route

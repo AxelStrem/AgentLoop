@@ -1099,7 +1099,7 @@ async function addFromTracker() {
   };
 
   // The folder offered for a repository with an address: beside the first folder the person gave
-  // another repository, else `<home>/<project>/<repo>` on this machine (item clone).
+  // another repository, else `<clones>/<repo>`, the folder the server says (item clone).
   const parentOf = (path) => {
     const trimmed = path.replace(/[\\/]+$/, "");
     const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
@@ -1108,7 +1108,7 @@ async function addFromTracker() {
   const offerFolders = () => {
     const inputs = [...root.querySelectorAll("[data-repo]")];
     const picked = inputs.find((i) => !i.dataset.offered && i.value.trim());
-    const base = picked ? parentOf(picked.value.trim()) : `${shown.home}/${shown.project}`;
+    const base = picked ? parentOf(picked.value.trim()) : shown.clones;
     for (const input of inputs) if (input.dataset.offered) input.value = `${base}/${input.dataset.repo}`;
   };
   const cloneInto = async (repo, input, button, status) => {
