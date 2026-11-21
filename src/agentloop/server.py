@@ -235,17 +235,23 @@ ROUTES = [
     ("POST", r"/api/accounts", "add_account"),
     ("POST", r"/api/accounts/default", "default_account"),
     ("GET", r"/api/usage", "get_usage"),
+    ("POST", r"/api/workers/([^/]+)/approve-limit", "approve_limit"),
 ]
 
 
 def worker_usage(worker: config.Worker) -> dict | None:
-    """The worker's last usage as the page shows it: when it was reported, what, and its line."""
+    """The worker's last usage as the page shows it: when it was reported, what, and its line; and
+    the limit of its own it is past, if any, and its approvals (item h87x)."""
     last = accounts.last_usage(worker.name)
     if not last:
         if worker.sign_in_kind == "apiKey":
             return {"at": None, "rate": None, "line": usage.per_use_line(usage.account_name(worker.claude))}
         return None
-    return {"at": last[0], "rate": last[1], "line": usage.usage_line(last[1], usage.account_name(worker.claude))}
+    over = accounts.over_limit(worker)
+    now = time.time()
+    return {"at": last[0], "rate": last[1], "line": usage.usage_line(last[1], usage.account_name(worker.claude)),
+            "over": dataclasses.asdict(over) | {"name": usage.window_name(over.window)} if over else None,
+            "approved": {k: v for k, v in accounts.approvals(worker.name).items() if v > now}}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -876,6 +882,21 @@ class Handler(BaseHTTPRequestHandler):
         can ask for it as often as it polls."""
         settings = config.load_settings()
         self._json({"workers": {worker.name: worker_usage(worker) for worker in settings.workers}})
+
+    def route_approve_limit(self, name: str) -> None:
+        """The page's Go on past the limit (item h87x): as `agentloop approve-limit`. The loops on
+        the worker read the approval between sessions, so nothing is asked of them here."""
+        window = self._body().get("window")
+        if window is not None and not isinstance(window, str):
+            raise Refused(HTTPStatus.BAD_REQUEST, 'Send {"window": name} or {}.')
+        worker = next((w for w in config.load_settings().workers if w.name == name), None)
+        if worker is None:
+            raise Refused(HTTPStatus.NOT_FOUND, f"No worker named {name}.")
+        try:
+            over = accounts.approve(worker, window)
+        except ValueError as error:
+            raise Refused(HTTPStatus.CONFLICT, str(error)) from None
+        self._json({"approved": over.window, "until": over.until(time.time()), "usage": worker_usage(worker)})
 
     def route_add_account(self) -> None:
         body = self._body()

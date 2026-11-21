@@ -49,7 +49,6 @@ DEFAULTS: dict[str, Any] = {
     "buildAfterTriage": ["medium", "high"],
     "buildInTriageUpTo": 2,
     "trial": {"until": "2026-10-29", "complexity": "medium", "upTo": 3, "route": {"model": "sonnet", "effort": "high"}},
-    "stopAtWeeklyUse": 1.0,
     "askEveryMinutes": 30,
     "chainUpTo": 3,
     "repeatUpTo": 2,
@@ -74,8 +73,9 @@ DEFAULTS: dict[str, Any] = {
 # Settings the app had once and has no more: still accepted where they were written - a machine's
 # settings.json, a project's definition on the server - and dropped as they are read, so that a
 # setting made obsolete never stops a loop from starting. maxIterations ended a run after so many
-# items; a run now works until nothing can be worked (item no-limits).
-RETIRED = ("maxIterations",)
+# items; a run now works until nothing can be worked (item no-limits). stopAtWeeklyUse stopped a loop
+# at a share of the week; a worker's own weekly limit now pauses its loops there instead (item h87x).
+RETIRED = ("maxIterations", "stopAtWeeklyUse")
 
 # What acceptDefinition may be.
 ACCEPT_DEFINITION = ("auto", "ask")
@@ -240,7 +240,7 @@ def check_run_settings(where: str, field: str, settings: Any) -> None:
         elif key == "pushTries":
             if not _is_int(value) or value < 1:
                 raise ConfigError(where, at, "a whole number, 1 or more")
-        elif key in ("stopAtWeeklyUse", "askEveryMinutes", "autoStartMinutes"):
+        elif key in ("askEveryMinutes", "autoStartMinutes"):
             if not _is_number(value) or value <= 0:
                 raise ConfigError(where, at, "a number above 0")
         elif not _is_int(value) or value < 0:
@@ -523,6 +523,10 @@ class Worker:
     # {"token": VAR} or {"apiKey": VAR}, VAR naming the environment variable that holds the secret.
     # The secret itself is never in the settings.
     sign_in: dict | None = None
+    # The share of each usage window its loops may use before they pause, until the window resets
+    # or going on past it is approved (item h87x): {"five_hour": 0.8, "seven_day": 0.9}, any window
+    # a report names, and "overage", the extra usage, whose one limit is 0.
+    limits: dict | None = None
 
     @property
     def sign_in_kind(self) -> str | None:
@@ -655,6 +659,30 @@ def load_settings(path: Path | None = None) -> Settings:
     return parse_settings(raw, path)
 
 
+WINDOW = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _limits(where: str, at: str, raw) -> dict | None:
+    """A worker's `limits`: null, or each window's share, 0 to 1, or null for none. The extra
+    usage, `overage`, is reported as used or not and never as a share, so its one limit is 0."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError(where, at, 'null, or each window\'s share, as {"five_hour": 0.8, "seven_day": 0.9}')
+    limits = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not WINDOW.match(key):
+            raise ConfigError(where, at, f"{key!r} is not a window's name: lower case letters, digits and _")
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+            raise ConfigError(where, f"{at}.{key}", "a share from 0 to 1, or null for none")
+        if key == "overage" and value != 0:
+            raise ConfigError(where, f"{at}.{key}", "0 for none, or null: claude reports whether extra usage is used, not how much")
+        limits[key] = float(value)
+    return limits or None
+
+
 def parse_settings(raw: dict, path: Path) -> Settings:
     where = path.name
     _check_format(where, raw)
@@ -690,7 +718,8 @@ def parse_settings(raw: dict, path: Path) -> Settings:
             raise ConfigError(where, f"{at}.signIn",
                               "null for the folder's login, or {\"token\": VARIABLE} or {\"apiKey\": VARIABLE}: "
                               "the name of the environment variable holding it, never the secret")
-        workers.append(Worker(name, claude, overseer, manager, sign_in))
+        limits = _limits(where, f"{at}.limits", w.get("limits"))
+        workers.append(Worker(name, claude, overseer, manager, sign_in, limits))
 
     # Each loop's own keys checked first, then each copy filled in from the loop it is like, which
     # may come after it in the file.

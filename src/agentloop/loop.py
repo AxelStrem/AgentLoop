@@ -65,6 +65,11 @@ Differences from the script, each deliberate:
 - A run has no limit on its items, and the queue none on the items flagged asked (item no-limits):
   it works until nothing on the tracker can be worked, or something else ends it. The script stops
   after `-MaxIterations` items, and on ten items flagged asked.
+- A worker may have limits of its own, a share of each usage window (item h87x): past one, the
+  loop runs no session - before an item, before a triage's build, before going on to another item
+  in a session - until the window resets or going on past it is approved (`_pause`). The script
+  has none; its `-StopAtWeeklyUse` (`Test-WeekUsed`) stopped the loop at a share of the week, and
+  is retired here: a worker's weekly limit pauses its loops there instead.
 - Only Windows has been tried: this machine is Windows.
 """
 
@@ -531,7 +536,8 @@ class Run:
         self.run_cost = 0.0
         self.last_rate: dict | None = None
         self.killed = False
-        self.week_reached = False
+        # A stop or a kill asked while paused at a worker's limit, before a triage's build.
+        self.limit_stopped = False
         self.seen: dict[str, dict] = {}
         self.session_spent: dict[str, session.Spent] = {}
         self.session_context = 0
@@ -1139,11 +1145,11 @@ class Run:
         small = bool(now) and points_of(now) <= self._s("buildInTriageUpTo")
         if (kind == "triage" and now and now.get("stage") == "ready"
                 and (now.get("complexity") in self._s("buildAfterTriage") or small) and not self.trial_applies(now)):
-            said = usage.week_used(self.last_rate, float(self._s("stopAtWeeklyUse")))
-            if said:
-                self.say(said, "DarkYellow")
-                self.week_reached = True
-                session.clear_session(session_id, self.scratch, self.worker.claude)
+            # Past the worker's own limit, the build waits until it resets or going on is approved.
+            if self._pause(between=False) is not None:
+                self.limit_stopped = True
+                self.say(f"The triage of {item['handle']} is committed. To build it by hand in the same session:", "Yellow")
+                self.say(f"  {self.resume_command(session_id)}", "Yellow")
                 return False
             # A kill asked for during the triage stops the loop before the build: the triage is
             # committed, and the build can be begun by hand in the same session.
@@ -1177,6 +1183,8 @@ class Run:
             why = f"its context is {round(self.session_context / 1000)}k tokens"
         elif self.stop_file.exists() or self.kill_file.exists():
             why = "a stop was asked for"
+        elif self._over() is not None:
+            why = f"{self.worker.name} is past one of its usage limits"
         if not why:
             nxt = self.read_next("--prefer", asked)
             if not nxt or nxt.get("signal") or not nxt.get("preferred"):
@@ -1197,12 +1205,6 @@ class Run:
             line = usage.per_use_line(account)
         if line:
             self.say("  " + line, "DarkCyan")
-
-    def week_used(self) -> bool:
-        said = usage.week_used(self.last_rate, float(self._s("stopAtWeeklyUse")))
-        if said:
-            self.say(said, "DarkYellow")
-        return bool(said)
 
     # The whole run
 
@@ -1315,6 +1317,8 @@ class Run:
                 ended = self._setup()
             if ended is None:
                 ended = self._brew()
+            if ended is None:
+                ended = self._pause()
             if ended is not None:
                 status = ended
                 break
@@ -1385,8 +1389,6 @@ class Run:
                 break
             session.clear_session(session_id, self.scratch, self.worker.claude)
             self.usage_line()
-            if self.week_used():
-                break
             # A brief pause between clean iterations.
             self.clock.sleep(COOLDOWN)
 
@@ -1674,6 +1676,52 @@ class Run:
                 return self._take(held["definition"])
             self.clock.sleep(usage.POLL_SECONDS)
 
+    def _over(self) -> usage.Over | None:
+        """The window the worker is past its own limit in, unapproved (item h87x). Its limits are
+        read from the settings each time, so that the page's Edit reaches a loop already running;
+        settings that cannot be read just now leave them as they were."""
+        worker = self.worker
+        try:
+            found = next((w for w in config.load_settings().workers if w.name == worker.name), None)
+            if found is not None:
+                worker = found
+        except (config.ConfigError, OSError):
+            pass
+        return accounts.over_limit(worker, self.clock.now())
+
+    def _pause(self, between: bool = True) -> int | None:
+        """Runs no session while the worker is past one of its own limits (item h87x): until the
+        window resets, or going on past it is approved - on the page, or with `agentloop
+        approve-limit` - as `_hold` waits for a definition's Accept. A session already running is
+        never ended for it, so one may go a little past. None to go on; 0 when a stop or a kill
+        ended the wait. `between` items, no item is at work; before a build, its item still is. The
+        script has nothing like it."""
+        over = self._over()
+        if over is None:
+            return None
+        told = None
+        while over is not None:
+            if (over.window, over.resets) != told:
+                told = (over.window, over.resets)
+                self.say(f" {over.line(self.worker.name)}", "Yellow")
+                resets = usage.local(over.resets).isoformat(timespec="seconds") if over.resets else None
+                if between:
+                    self._status(item=None, title=None, kind=None, session=None)
+                self._status(state="paused", until=resets, limit=over.window, over={
+                    "window": over.window, "name": usage.window_name(over.window),
+                    "used": over.used, "limit": over.limit, "resets": resets})
+            if self._stop_asked("paused at a usage limit"):
+                self._status(over=None)
+                return 0
+            self.clock.sleep(usage.POLL_SECONDS)
+            last = over
+            over = self._over()
+        approved = accounts.approvals(self.worker.name).get(last.window, 0) > self.clock.now()
+        why = "going on past it was approved" if approved else "it has reset"
+        self.say(f" Going on: {self.worker.name}'s {usage.window_name(last.window)} limit holds no more, as {why}.", "Green")
+        self._status(state="running", until=None, limit=None, over=None)
+        return None
+
     def _take(self, raw: dict) -> int | None:
         """The run on a new definition: its settings, its repositories and places placed again, and
         its system prompt written again. A system the machine is not on stops the run, as
@@ -1762,9 +1810,9 @@ class Run:
         return 0
 
     def _stopped_cleanly(self) -> bool:
-        # A kill, or the weekly share reached, is a stop asked for; anything else is for the owner
-        # to look at.
-        return self.killed or self.week_reached
+        # A kill, or a stop while paused at a worker's limit, is a stop asked for; anything else is
+        # for the owner to look at.
+        return self.killed or self.limit_stopped
 
 
 def find_loop(machine: config.Machine, name: str) -> config.Loop:

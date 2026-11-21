@@ -672,13 +672,87 @@ def test_work_after_a_wait_is_a_new_run(project, fake_claude):
     assert "Loop finished; its sessions came to $0.05." in p.lines
 
 
-def test_stops_at_the_weekly_share(project, fake_claude):
+# A worker's own limits (item h87x)
+
+def _limits(limits: dict) -> None:
+    settings_file = config.paths().settings
+    raw = json.loads(settings_file.read_text(encoding="utf-8"))
+    raw["workers"][0]["limits"] = limits
+    config.save_json(settings_file, raw)
+
+
+HOT = {"status": "allowed", "resetsAt": "@now+7200", "rateLimitType": "five_hour",
+       "unifiedWindows": {"five_hour": {"utilization": 0.9, "resetsAt": "@now+7200"},
+                          "seven_day": {"utilization": 0.3, "resetsAt": "@now+172800"}}}
+
+
+def _on_sleep(p, act) -> list[float]:
+    """Calls `act` at each of the clock's sleeps while the loop is paused; the sleeps, for the test."""
+    slept = []
+    sleep = p.clock.sleep
+
+    def paused(seconds):
+        if p.r.status.get("state") == "paused":
+            slept.append(seconds)
+            act(len(slept))
+        sleep(seconds)
+    p.clock.sleep = paused
+    return slept
+
+
+def test_a_worker_past_its_limit_pauses_until_the_window_resets(project, fake_claude):
     p = project(item("alpha", "ready", complexity="low"), item("beta", "ready", complexity="low"))
-    rate = {"status": "allowed", "unifiedWindows": {"seven_day": {"utilization": 0.9}}}
-    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built", rate=rate))
-    assert p.go(stopAtWeeklyUse=0.8) == 0
+    _limits({"five_hour": 0.8})
+    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built", rate=HOT),
+           p.scene(move("beta", "testing"), result="COMMIT: beta: built"))
+    p.run()
+    states = []
+    slept = _on_sleep(p, lambda n: states.append(p.r.status.get("over")) if n == 1 else None)
+    assert p.r.run() == 0
+    assert len(fake_claude.calls()) == 2
+    assert any(l.startswith(" Paused: worker w is at 90% of its 5-hour allowance (its limit 80%), until it resets ") for l in p.lines)
+    assert " Going on: w's 5-hour limit holds no more, as it has reset." in p.lines
+    assert sum(slept) >= 7000
+    assert states[0]["window"] == "five_hour" and states[0]["used"] == 0.9 and states[0]["limit"] == 0.8
+    assert p.r.status["over"] is None
+
+
+def test_going_on_past_a_limit_once_it_is_approved(project, fake_claude):
+    p = project(item("alpha", "ready", complexity="low"), item("beta", "ready", complexity="low"))
+    _limits({"five_hour": 0.8})
+    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built", rate=HOT),
+           p.scene(move("beta", "testing"), result="COMMIT: beta: built", rate=HOT))
+    p.run()
+    worker = config.load_settings().workers[0]
+    slept = _on_sleep(p, lambda n: accounts.approve(worker, now=p.clock.now()) if n == 2 else None)
+    assert p.r.run() == 0
+    # The approval holds for the window, so the second session's report pauses nothing.
+    assert len(fake_claude.calls()) == 2 and len(slept) == 2
+    assert " Going on: w's 5-hour limit holds no more, as going on past it was approved." in p.lines
+    assert sum(1 for l in p.lines if l.startswith(" Paused:")) == 1
+
+
+def test_a_stop_ends_a_pause(project, fake_claude):
+    p = project(item("alpha", "ready", complexity="low"), item("beta", "ready", complexity="low"))
+    _limits({"five_hour": 0.8})
+    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built", rate=HOT))
+    p.run()
+    _on_sleep(p, lambda n: p.r.stop_file.write_text(""))
+    assert p.r.run() == 0
     assert len(fake_claude.calls()) == 1
-    assert "The weekly allowance is 90% used (limit 80%). Stopping." in p.lines
+    assert "Stopping as asked." in p.lines and p.r.status["state"] == "stopped"
+
+
+def test_a_limit_reached_in_a_triage_pauses_its_build(project, fake_claude):
+    p = project(item("alpha", labels="core"))
+    _limits({"five_hour": 0.8})
+    p.play(p.scene(move("alpha", "ready", "medium", 3), result="COMMIT: alpha: triaged", rate=HOT))
+    p.run()
+    _on_sleep(p, lambda n: p.r.kill_file.write_text(""))
+    assert p.r.run() == 0
+    assert len(fake_claude.calls()) == 1
+    assert "Stopped at once, as asked, while paused at a usage limit." in p.lines
+    assert "The triage of alpha is committed. To build it by hand in the same session:" in p.lines
 
 
 def test_the_last_usage_is_kept_for_the_worker(project, fake_claude):

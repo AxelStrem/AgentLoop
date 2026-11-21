@@ -296,3 +296,47 @@ def test_the_accounts_command(home, fake_claude, capsys):
     assert capsys.readouterr().out.strip().endswith("claude auth login")
     assert cli.main(["accounts", "login", "nobody"]) == 2
     assert 'no worker named "nobody"' in capsys.readouterr().err
+
+
+# Going on past a worker's limits (item h87x)
+
+def test_approving_a_limit(home):
+    worker = config.Worker("one", None, None, limits={"five_hour": 0.8, "seven_day": 0.9})
+    now = 1000.0
+    assert accounts.over_limit(worker, now) is None and accounts.approvals("one") == {}
+    with pytest.raises(ValueError, match="one is not past any of its limits"):
+        accounts.approve(worker, now=now)
+    accounts.save_usage("one", {"unifiedWindows": {"five_hour": {"utilization": 0.85, "resetsAt": now + 600},
+                                                   "seven_day": {"utilization": 0.95, "resetsAt": now + 9000}}}, at=now)
+    assert accounts.over_limit(worker, now).window == "five_hour"
+    # The weekly one asked of by name, though the 5-hour comes first.
+    assert accounts.approve(worker, "seven_day", now=now).window == "seven_day"
+    assert accounts.approvals("one") == {"seven_day": now + 9000}
+    assert accounts.over_limit(worker, now).window == "five_hour"
+    assert accounts.approve(worker, now=now).window == "five_hour"
+    assert accounts.over_limit(worker, now) is None
+    with pytest.raises(ValueError, match="not past its 5-hour limit"):
+        accounts.approve(worker, "five_hour", now=now)
+    # Once the 5-hour window resets its approval lapses, and is let go of at the next.
+    later = now + 700
+    accounts.save_usage("one", {"unifiedWindows": {"five_hour": {"utilization": 0.9, "resetsAt": later + 18000},
+                                                   "seven_day": {"utilization": 0.95, "resetsAt": now + 9000}}}, at=later)
+    assert accounts.over_limit(worker, later).window == "five_hour"
+    accounts.approve(worker, now=later)
+    assert accounts.approvals("one") == {"seven_day": now + 9000, "five_hour": later + 18000}
+    assert sorted(p.name for p in accounts.approvals_file("one").parent.iterdir()) == ["approvals.json", "usage.json"]
+    accounts.approvals_file("one").write_text("not json")
+    assert accounts.approvals("one") == {}
+
+
+def test_approve_limit_command(home, capsys):
+    config.save_json(config.paths().settings, {"format": 1, "workers": [
+        {"name": "one", "claude": None, "overseer": None, "limits": {"five_hour": 0.5}}], "loops": [], "defaults": {}})
+    assert cli.main(["approve-limit", "one"]) == 1
+    assert "one is not past any of its limits" in capsys.readouterr().err
+    accounts.save_usage("one", {"unifiedWindows": {"five_hour": {"utilization": 0.6, "resetsAt": 4e9}}})
+    assert cli.main(["approve-limit", "one", "five_hour"]) == 0
+    assert "one's loops go on past its 5-hour limit until" in capsys.readouterr().out
+    assert accounts.approvals("one") == {"five_hour": 4e9}
+    assert cli.main(["approve-limit", "nobody"]) == 2
+    assert "no worker named nobody" in capsys.readouterr().err

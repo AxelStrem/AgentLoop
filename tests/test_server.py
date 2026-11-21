@@ -616,6 +616,24 @@ def test_the_usage_alone(home, serve, fake_claude):
     assert c.json("GET", "/api/usage")["workers"]["w"]["at"] == 2000.0
 
 
+def test_going_on_past_a_workers_limit(home, serve, fake_claude):
+    c = serve()
+    raw = json.loads(config.paths().settings.read_text(encoding="utf-8"))
+    raw["workers"][0]["limits"] = {"five_hour": 0.8}
+    config.save_json(config.paths().settings, raw)
+    assert "is not past any of its limits" in c.json("POST", "/api/workers/w/approve-limit", {}, expect=409)["error"]
+    rate = {"unifiedWindows": {"five_hour": {"utilization": 0.9, "resetsAt": 4e9}}}
+    accounts.save_usage("w", rate)
+    said = c.json("GET", "/api/usage")["workers"]["w"]
+    assert said["over"] == {"window": "five_hour", "used": 0.9, "limit": 0.8, "resets": 4e9, "name": "5-hour"}
+    assert said["approved"] == {}
+    done = c.json("POST", "/api/workers/w/approve-limit", {"window": "five_hour"})
+    assert done["approved"] == "five_hour" and done["until"] == 4e9
+    assert done["usage"]["over"] is None and done["usage"]["approved"] == {"five_hour": 4e9}
+    c.json("POST", "/api/workers/nobody/approve-limit", {}, expect=404)
+    c.json("POST", "/api/workers/w/approve-limit", {"window": 5}, expect=400)
+
+
 def test_no_answer_holds_the_key(home, serve, fake_claude):
     c = serve()
     c.json("POST", "/api/loops", {"loop": loop_entry()})

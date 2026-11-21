@@ -67,6 +67,9 @@ def _parser() -> argparse.ArgumentParser:
     show_def.add_argument("loop")
     accept = sub.add_parser("accept", help="accept a loop's changed definition, or dismiss one already used")
     accept.add_argument("loop")
+    approve = sub.add_parser("approve-limit", help="let a worker's loops go on past one of its usage limits until that window resets")
+    approve.add_argument("worker")
+    approve.add_argument("window", nargs="?", help="five_hour, seven_day, overage, ...; the first it is past when left out")
     build = sub.add_parser("build", help="make a runnable copy of the app at another path")
     build.add_argument("--to", help="where to build; the settings' install field when left out")
     sub.add_parser("version", help="print the version")
@@ -514,6 +517,30 @@ def _retarget(args: argparse.Namespace) -> int:
     return 0
 
 
+def _approve_limit(args: argparse.Namespace) -> int:
+    """`approve-limit` (item h87x): as the page's Go on past the limit."""
+    from agentloop import accounts, config, usage
+
+    try:
+        settings = config.load_settings()
+    except config.ConfigError as error:
+        print(f"agentloop approve-limit: {error}", file=sys.stderr)
+        return 2
+    worker = next((w for w in settings.workers if w.name == args.worker), None)
+    if worker is None:
+        known = ", ".join(w.name for w in settings.workers) or "none"
+        print(f"agentloop approve-limit: no worker named {args.worker}. The workers are: {known}", file=sys.stderr)
+        return 2
+    try:
+        over = accounts.approve(worker, args.window)
+    except ValueError as error:
+        print(f"agentloop approve-limit: {error}", file=sys.stderr)
+        return 1
+    lapses = usage.local(over.until(usage.Clock().now()))
+    print(f"{worker.name}'s loops go on past its {usage.window_name(over.window)} limit until {lapses:%a %H:%M}, when it resets.")
+    return 0
+
+
 def _definition(args: argparse.Namespace) -> int:
     """`show-definition` and `accept` (item doc-change): what a loop on a tracker keeps of its
     definition, read from its folder, never from the server."""
@@ -608,6 +635,8 @@ def main(argv: list[str] | None = None) -> int:
         return _retarget(args)
     if args.command in ("show-definition", "accept"):
         return _definition(args)
+    if args.command == "approve-limit":
+        return _approve_limit(args)
     if args.command in ("start", "stop", "kill", "status"):
         return _runner(args)
     print(f"agentloop {args.command}: not built yet (item {_STUBS[args.command]})", file=sys.stderr)

@@ -20,7 +20,7 @@ def test_the_examples_load():
     settings = config.load_settings(EXAMPLES / "settings.json")
     assert [w.name for w in settings.workers] == ["account1", "account2"]
     assert settings.loop("orchard").worker == "account2"
-    assert settings.defaults == {"stopAtWeeklyUse": 0.9}
+    assert settings.defaults == {"askEveryMinutes": 60}
     quill = config.load_bundle(EXAMPLES / "quill")
     assert quill.tracker.server == "alice/projects/quill.os"
     orchard = config.load_bundle(EXAMPLES / "orchard")
@@ -32,7 +32,7 @@ def test_settings_layer_over_each_other():
     orchard = config.load_bundle(EXAMPLES / "orchard")
     settings = config.load_settings(EXAMPLES / "settings.json")
     result = config.effective_settings(settings.defaults, orchard.settings, {"buildInTriageUpTo": 3, "routes": {"high": {"model": "sonnet", "effort": "max"}}})
-    assert result["stopAtWeeklyUse"] == 0.9
+    assert result["askEveryMinutes"] == 60
     assert result["buildInTriageUpTo"] == 3
     # Routes merge one by one, as the script merges a project's Routes over its own.
     assert result["routes"]["low"] == {"model": "opus", "effort": "medium"}
@@ -82,6 +82,11 @@ def test_an_overseer_library_from_older_settings_is_let_be(tmp_path):
     (lambda s: s["workers"][0].update(signIn={"password": "X"}), "workers[0].signIn: null for the folder's login"),
     (lambda s: s["workers"][0].update(signIn={"token": "A", "apiKey": "B"}), "workers[0].signIn: null for the folder's login"),
     (lambda s: s["workers"][0].update(signIn="TOKEN"), "workers[0].signIn: null for the folder's login"),
+    (lambda s: s["workers"][0].update(limits=0.8), "workers[0].limits: null, or each window's share"),
+    (lambda s: s["workers"][0].update(limits={"five_hour": 80}), "workers[0].limits.five_hour: a share from 0 to 1"),
+    (lambda s: s["workers"][0].update(limits={"five_hour": True}), "workers[0].limits.five_hour: a share from 0 to 1"),
+    (lambda s: s["workers"][0].update(limits={"Five Hour": 0.5}), "workers[0].limits: 'Five Hour' is not a window's name"),
+    (lambda s: s["workers"][0].update(limits={"overage": 0.5}), "workers[0].limits.overage: 0 for none, or null"),
 ])
 def test_wrong_settings_are_said_plainly(tmp_path, change, says):
     raw = _example_settings()
@@ -163,6 +168,15 @@ def test_a_workers_sign_in_loads(tmp_path):
     del raw["workers"][0]["signIn"]
     raw["workers"][1]["signIn"] = None
     assert [w.sign_in_kind for w in config.load_settings(_write(tmp_path / "b.json", raw)).workers] == [None, None]
+
+
+def test_a_workers_limits_load(tmp_path):
+    raw = _example_settings()
+    raw["workers"][0]["limits"] = {"five_hour": 0.8, "seven_day": 1, "seven_day_sonnet": None, "overage": 0}
+    raw["workers"][1]["limits"] = {"five_hour": None}
+    one, two = config.load_settings(_write(tmp_path / "a.json", raw)).workers
+    assert one.limits == {"five_hour": 0.8, "seven_day": 1.0, "overage": 0.0}
+    assert two.limits is None
 
 
 def test_a_workers_manager_loads_and_is_saved(tmp_path):
@@ -373,14 +387,14 @@ def test_deleting_a_loop_that_has_copies_would_not_load(tmp_path):
 
 
 def test_a_retired_setting_is_accepted_and_dropped(tmp_path):
-    """maxIterations is gone (item no-limits); a file or definition that still says it loads, and
-    saving it again leaves it out."""
+    """maxIterations is gone (item no-limits), and stopAtWeeklyUse (item h87x); a file or
+    definition that still says either loads, and saving it again leaves it out."""
     path = tmp_path / "settings.json"
     raw = _example_settings()
-    raw["defaults"] = {"maxIterations": 5, "chainUpTo": 1}
-    raw["loops"][0]["settings"] = {"maxIterations": 9}
+    raw["defaults"] = {"maxIterations": 5, "chainUpTo": 1, "stopAtWeeklyUse": 0.9}
+    raw["loops"][0]["settings"] = {"maxIterations": 9, "stopAtWeeklyUse": 0.5}
     settings = config.save_settings(raw, path)
     assert settings.defaults == {"chainUpTo": 1} and settings.loop("quill").settings == {}
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["defaults"] == {"chainUpTo": 1} and saved["loops"][0]["settings"] == {}
-    assert "maxIterations" not in config.DEFAULTS
+    assert "maxIterations" not in config.DEFAULTS and "stopAtWeeklyUse" not in config.DEFAULTS

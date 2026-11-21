@@ -14,7 +14,6 @@ const SETTINGS = {
   buildAfterTriage: "The complexities a triage that leaves its item ready goes straight on to build, in the same session.",
   buildInTriageUpTo: "A triage goes on to build an item of this many points or fewer, whatever its complexity.",
   trial: "Until a date, builds of one complexity up to some points go on another route, to try it.",
-  stopAtWeeklyUse: "Stop between items once this share of the week's allowance is used; 1 never stops early.",
   askEveryMinutes: "While a usage limit is waited out, how often to ask whether it has lifted sooner.",
   chainUpTo: "How many items one session may work, going on to the one it asks for.",
   repeatUpTo: "Stop once sessions on one model have left an item at the same stage this many times.",
@@ -223,6 +222,13 @@ function renderLoops() {
     const item = s.item ? h("span", { title: s.title || "" }, `${s.kind || ""} ${s.item}`.trim(), s.title ? h("span", { class: "sub", text: s.title }) : null) : "";
     const stateCell = [h("span", { class: "state" }, h("span", { class: `dot ${s.state}` }), s.state)];
     if (s.until) stateCell.push(h("span", { class: "sub", text: s.state === "idle" ? `${s.watching ? "on any change, else " : ""}next look ${s.until}` : `until ${s.until}` }));
+    // Paused at its worker's own limit (item h87x): why, and the approval that lets it go on.
+    if (s.state === "paused" && s.over) {
+      stateCell.push(h("span", { class: "sub", text: overText(s.over) }),
+        h("button", { type: "button", class: "small", "aria-label": `Go on past the limit, ${loop.name}`,
+          title: `Lets every loop on ${loop.worker} go on past its ${s.over.name} limit until the window resets`,
+          onclick: () => approveLimit(loop.worker, s.over.window) }, "Go on past the limit"));
+    }
     if (s.state === "failed" && s.error) stateCell.push(h("span", { class: "problem", text: s.error }));
     if (s.busy) stateCell.push(h("span", { class: "sub", text: s.busy }));
     // The project's setup script (item project-setup): a failed run with the end of its output,
@@ -353,6 +359,35 @@ function showDefinitionChange(name) {
     } }, change.pending ? "Accept" : "Dismiss"),
   ));
   dialog.showModal();
+}
+
+// A worker's own usage limits (item h87x): the windows a form offers, and how one past its limit is said.
+const LIMIT_WINDOWS = [["five_hour", "5-hour"], ["seven_day", "weekly"]];
+
+function overText(over) {
+  if (over.window === "overage") return "using extra usage, which its worker allows none of";
+  return `${over.name} ${Math.round(over.used * 100)}% used, its worker's limit ${Math.round(over.limit * 100)}%`;
+}
+
+function limitsText(limits) {
+  const parts = [];
+  for (const [key, value] of Object.entries(limits || {})) {
+    if (value === null || value === undefined) continue;
+    if (key === "overage") parts.push("no extra usage");
+    else parts.push(`${(LIMIT_WINDOWS.find(([k]) => k === key) || [key, key.replace(/_/g, " ")])[1]} ${Math.round(value * 100)}%`);
+  }
+  return parts.join(", ");
+}
+
+async function approveLimit(worker, window) {
+  try {
+    await api("POST", `/api/workers/${encodeURIComponent(worker)}/approve-limit`, window ? { window } : {});
+    say(`${worker}'s loops go on past the limit until the window resets.`);
+    await loadLoops();
+    if (!$("view-machine").hidden) await readUsage();
+  } catch (error) {
+    failed(error);
+  }
 }
 
 function loopOf(name) {
@@ -1317,6 +1352,10 @@ async function readUsage() {
     for (const el of document.querySelectorAll("#workers .usage")) {
       if (el.dataset.worker === name) el.textContent = usageText(usage);
     }
+    const worker = (state.settings.workers || []).find((w) => w.name === name);
+    for (const el of document.querySelectorAll("#workers .limits")) {
+      if (el.dataset.worker === name && worker) el.replaceWith(limitCard(worker, usage) || h("span"));
+    }
   }
 }
 
@@ -1344,6 +1383,7 @@ function drawWorkers() {
       h("div", {}, h("span", { class: said && said.login.state === "in" ? "" : "problem", text: login })),
       said && said.login.state !== "in" && said.loginCommand ? h("pre", { class: "mono", text: said.loginCommand }) : null,
       h("div", { class: "usage c-darkcyan mono", "data-worker": worker.name, text: usageText(said && said.usage) }),
+      limitCard(worker, said && said.usage),
       worker.manager ? h("div", { class: "sub" }, "manager ", h("span", { class: "mono", text: worker.manager }), ": its loops take their items first") : null,
       worker.overseer ? h("div", { class: "sub" }, "server ", h("span", { class: "mono", text: overseer.server || "" }),
         ", key file ", h("span", { class: "mono", text: overseer.keyFile || "" }))
@@ -1358,6 +1398,22 @@ function drawWorkers() {
         h("button", { type: "button", class: "small", onclick: () => addWorker(f.claude, f.name) }, `Add as ${f.name}`))));
     }
   }
+}
+
+// A worker's own limits on its card: what they are, the one it is past, and the button that lets its
+// loops go on past it.
+function limitCard(worker, usage) {
+  const said = limitsText(worker.limits);
+  if (!said) return null;
+  const box = h("div", { class: "sub limits", "data-worker": worker.name }, `pauses its loops at ${said}`);
+  if (usage && usage.over) {
+    box.append(h("div", {}, h("span", { class: "problem", text: `past it: ${overText(usage.over)}` }), " ",
+      h("button", { type: "button", class: "small", onclick: () => approveLimit(worker.name, usage.over.window) }, "Go on past the limit")));
+  }
+  for (const [key, until] of Object.entries((usage && usage.approved) || {})) {
+    box.append(h("div", { text: `going on past its ${key === "overage" ? "extra usage" : (LIMIT_WINDOWS.find(([k]) => k === key) || [key, key])[1]} limit, approved, until ${new Date(until * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` }));
+  }
+  return box;
 }
 
 async function addWorker(claude, name) {
@@ -1453,6 +1509,19 @@ function editWorker(name) {
   signIn.value = signKind;
   const signVariable = h("input", { class: "mono", value: signKind ? worker.signIn[signKind] : "",
     placeholder: "CLAUDE_CODE_OAUTH_TOKEN" });
+  // Its own usage limits (item h87x), as %: the 5-hour and weekly windows, any other its limits or
+  // its last report name, and the extra usage, which reports say is used or not, never how much.
+  const limits = worker.limits || {};
+  const said = workerOf(name);
+  const reported = Object.keys(((said && said.usage && said.usage.rate) || {}).unifiedWindows || {});
+  const windows = [...LIMIT_WINDOWS];
+  for (const key of [...reported, ...Object.keys(limits)]) {
+    if (key !== "overage" && !windows.some(([k]) => k === key)) windows.push([key, key.replace(/_/g, " ")]);
+  }
+  const limitInputs = windows.map(([key, label]) => [key, label, h("input", {
+    type: "number", class: "short", min: "0", max: "100", step: "1", placeholder: "none",
+    value: limits[key] != null ? String(Math.round(limits[key] * 100)) : "" })]);
+  const noOverage = h("input", { type: "checkbox", checked: limits.overage === 0 });
   root.append(
     field("Claude folder", "The account's config folder, CLAUDE_CONFIG_DIR; empty for the default account.", claude, "claude"),
     field("a server", "The Overseer server the trackers are on, and the key its loops sign with.", h("label", { class: "group" }, hasServer, "this worker has one"), "overseer"),
@@ -1462,7 +1531,12 @@ function editWorker(name) {
       pasteKey(keyFile, () => ({ server: server.value.trim() })), "key"),
     field("manager", "The Overseer username whose items this worker's loops take first; empty for none.", manager, "manager"),
     field("signs in with", "How its sessions sign in to Claude. A token or key is read from an environment variable where agentloop runs, as in a container.", signIn, "signIn"),
-    field("variable", "The name of the environment variable holding the token or key: never the secret itself.", signVariable, "signIn"));
+    field("variable", "The name of the environment variable holding the token or key: never the secret itself.", signVariable, "signIn"),
+    ...limitInputs.map(([key, label, input]) => field(`${label} limit`,
+      `Its loops pause before a session once this % of the ${label} allowance is used, until it resets or you approve going on past it; empty for none.`,
+      h("span", { class: "group" }, input, "%"), "limits")),
+    field("extra usage", "Pause its loops while a session reports using extra usage, past its plan's allowance, until the window that ran out resets or you approve going on.",
+      h("label", { class: "group" }, noOverage, "allow none"), "limits"));
   const body = { el: root, mark: (f) => markInputs(root, f) };
   openEditor(`The worker ${name}`, body, async () => {
     await saveSettings((raw) => {
@@ -1472,6 +1546,13 @@ function editWorker(name) {
       w.manager = manager.value.trim() || null;
       if (signIn.value) w.signIn = { [signIn.value]: signVariable.value.trim() };
       else delete w.signIn;
+      const set = {};
+      for (const [key, , input] of limitInputs) {
+        if (input.value.trim() !== "") set[key] = Number(input.value) / 100;
+      }
+      if (noOverage.checked) set.overage = 0;
+      if (Object.keys(set).length) w.limits = set;
+      else delete w.limits;
     });
     await loadAccounts(true);
     drawWorkers();

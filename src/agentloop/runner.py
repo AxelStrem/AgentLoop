@@ -77,7 +77,8 @@ class LoopStatus:
     name: str
     project: str
     # starting, running, waiting (on a usage limit), idle (on an empty queue), held (on a changed
-    # definition to accept, or a path to give - item doc-change), stopping, stopped or failed.
+    # definition to accept, or a path to give - item doc-change), paused (at its worker's own usage
+    # limit - item h87x), stopping, stopped or failed.
     state: str
     alive: bool
     pid: int | None = None
@@ -90,6 +91,9 @@ class LoopStatus:
     until: str | None = None
     # Idle, and hearing its tracker's changes as they are made (item instant-auto).
     watching: bool = False
+    # Paused: the window past its worker's limit - its key and name, the share used and the limit,
+    # and when it resets (item h87x).
+    over: dict | None = None
     started: str | None = None
     ended: str | None = None
     exit: int | None = None

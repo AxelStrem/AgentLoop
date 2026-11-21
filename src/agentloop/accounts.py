@@ -25,6 +25,8 @@ Differences from the script, each deliberate:
   prints an address to open on any machine and takes the code back, with no browser here.
 - The last usage a worker's sessions reported is kept, so the page can show it before a loop runs;
   the script only knows it from the stream of the run it is in.
+- Going on past a worker's limit (item h87x) is approved for the worker, in its data folder beside
+  its usage, so every loop on it sees it; each approval lapses as its window resets.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from agentloop import config, session
+from agentloop import config, session, usage
 
 # How long `claude auth status` may take, in seconds, before the answer counts as unknown.
 STATUS_TIMEOUT = 30
@@ -350,12 +352,14 @@ def usage_file(worker: str) -> Path:
 
 
 def save_usage(worker: str, rate: dict, at: float | None = None) -> None:
-    """The last `rate_limit_info` a session on this worker reported, and when. Written to a
-    temporary file and renamed over the old one; several loops in one process may write it, so the
-    temporary name is the OS's, not the process's."""
-    target = usage_file(worker)
+    """The last `rate_limit_info` a session on this worker reported, and when."""
+    _write_whole(usage_file(worker), {"at": time.time() if at is None else at, "rate": rate})
+
+
+def _write_whole(target: Path, data: dict) -> None:
+    """Written to a temporary file and renamed over the old one; several loops in one process may
+    write it, so the temporary name is the OS's, not the process's."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    data = {"at": time.time() if at is None else at, "rate": rate}
     handle, temporary = tempfile.mkstemp(dir=target.parent, prefix=".usage.", suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
@@ -377,3 +381,49 @@ def last_usage(worker: str) -> tuple[float, dict] | None:
     if not isinstance(at, (int, float)) or not isinstance(rate, dict):
         return None
     return float(at), rate
+
+
+# Going on past a worker's limits (item h87x)
+
+def approvals_file(worker: str) -> Path:
+    return config.paths().data / "workers" / worker / "approvals.json"
+
+
+def approvals(worker: str) -> dict[str, float]:
+    """Each window going on past whose limit is approved, and when that lapses: when the window
+    resets. Nothing, if none was or the file is not what this writes."""
+    try:
+        data = json.loads(approvals_file(worker).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: float(v) for k, v in data.items() if isinstance(k, str) and isinstance(v, (int, float)) and not isinstance(v, bool)}
+
+
+def over_limit(worker: config.Worker, now: float | None = None) -> usage.Over | None:
+    """The window of the worker's last report that is past its limit, unapproved, or None."""
+    last = last_usage(worker.name)
+    if not last or not worker.limits:
+        return None
+    return usage.over_limit(last[1], worker.limits, approvals(worker.name), time.time() if now is None else now)
+
+
+def approve(worker: config.Worker, window: str | None = None, now: float | None = None) -> usage.Over:
+    """Approves going on past the limit the worker is over - `window`'s, or the first - until that
+    window resets; the approvals that have lapsed are let go of. A ValueError when it is over none,
+    or not over `window`'s."""
+    now = time.time() if now is None else now
+    over = over_limit(worker, now)
+    if window is not None and (over is None or over.window != window):
+        # Over another first, perhaps: `window` is asked of alone, as if the others were approved.
+        last = last_usage(worker.name)
+        only = {window: worker.limits[window]} if worker.limits and window in worker.limits else None
+        over = usage.over_limit(last[1], only, approvals(worker.name), now) if last and only else None
+    if over is None:
+        said = f"its {usage.window_name(window)} limit" if window else "any of its limits"
+        raise ValueError(f"{worker.name} is not past {said}: there is nothing to approve.")
+    kept = {k: v for k, v in approvals(worker.name).items() if v > now}
+    kept[over.window] = over.until(now)
+    _write_whole(approvals_file(worker.name), kept)
+    return over

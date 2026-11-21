@@ -120,7 +120,7 @@ table.loops tbody tr:hover, table.loops tbody tr:focus-within { background: var(
 .dot.running, .dot.starting, .dot.setting-up { background: var(--ok); }
 .dot.waiting, .dot.stopping { background: var(--warn); }
 .dot.idle { background: var(--accent); }
-.dot.held { background: var(--warn); }
+.dot.held, .dot.paused { background: var(--warn); }
 button.chip { background: none; cursor: pointer; font: inherit; font-size: 11.5px; line-height: inherit; }
 .chip.warn { border-color: var(--warn); color: var(--warn); font-weight: 600; }
 ul.changes .added, pre.diff .added { color: var(--ok); }
