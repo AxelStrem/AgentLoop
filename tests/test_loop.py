@@ -376,12 +376,11 @@ def test_going_on_in_the_same_session(project, fake_claude):
     assert len({c["session_id"] for c in calls}) == 1 and calls[1]["resume"] and calls[2]["resume"]
     assert calls[1]["prompt"].startswith("Your work on alpha has been committed. As you asked, go on in this same session with gamma, at ready")
     assert [a.get("went_on_from") for a in p.attempts()] == [None, "alpha", "gamma"]
-    assert "  build, at ready, in the same session, as it asked (item 2 of 20)" in p.lines
+    assert "  build, at ready, in the same session, as it asked (item 2)" in p.lines
 
 
 @pytest.mark.parametrize("settings, why", [
     ({"chainUpTo": 2}, "this session has worked 2 items"),
-    ({"maxIterations": 2}, "the run has worked its 2 items"),
     ({"chainContextUpTo": 5000}, "its context is 6k tokens"),
 ])
 def test_going_on_has_its_limits(project, fake_claude, settings, why):
@@ -477,12 +476,25 @@ def test_an_item_asked_about_is_not_a_repeat(project, fake_claude):
     assert not p.r.seen
 
 
-def test_stops_at_max_iterations(project, fake_claude):
-    p = project(item("alpha", "ready", complexity="low"), item("beta", "ready", complexity="low"))
+def test_a_run_has_no_limit_on_its_items(project, fake_claude):
+    # Item no-limits: it works until nothing is left, however many items that is.
+    handles = [f"i{n:02}" for n in range(22)]
+    p = project(*[item(h, "ready", complexity="low") for h in handles])
+    p.play(*[p.scene(move(h, "testing"), result=f"COMMIT: {h}: built") for h in handles])
+    assert p.go() == 0
+    assert len(fake_claude.calls()) == 22
+    assert " Iteration 22..." in p.lines
+    assert "[QUEUE_EMPTY] - All actionable agent tasks have been fully cleared." in p.lines
+
+
+def test_items_flagged_asked_do_not_stop_the_queue(project, fake_claude):
+    # However many wait on a person, a free item is still taken (item no-limits).
+    asked = [item(f"q{n:02}", "planning", flags="asked") for n in range(12)]
+    p = project(*asked, item("alpha", "ready", complexity="low"))
     p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"))
-    assert p.go(maxIterations=1) == 0
+    assert p.go() == 0
     assert len(fake_claude.calls()) == 1
-    assert " Iteration 1 of 1..." in p.lines
+    assert not any("Asked limit" in line for line in p.lines)
 
 
 def test_a_kill_during_a_session(project, fake_claude):
@@ -538,9 +550,9 @@ def test_an_empty_queue_is_waited_on_and_work_taken_as_it_comes(project, fake_cl
     assert r.run() == 0
     assert len(fake_claude.calls()) == 1
     assert " Nothing to work: looking again every 1 minutes, and as the tracker changes." in p.lines
-    assert " Work has come up. Iteration 1 of 20..." in p.lines
+    assert " Work has come up. Iteration 1..." in p.lines
     assert "Stopping as asked." in p.lines
-    assert p.lines.count(" Iteration 1 of 20...") == 1
+    assert p.lines.count(" Iteration 1...") == 1
     # Waiting again after the item, with nothing left of it on the page.
     assert states[0]["state"] == "idle" and states[0]["until"] and states[0]["item"] is None
     ended = json.loads(r.status_file.read_text(encoding="utf-8"))
@@ -569,7 +581,7 @@ def test_a_change_to_the_tracker_is_looked_at_once_it_settles(project, fake_clau
     assert len(fake_claude.calls()) == 1
     assert states[0]["watching"] is True
     # Looked at once the change had been still for SETTLE_SECONDS, not at the hour.
-    assert " Work has come up. Iteration 1 of 20..." in p.lines
+    assert " Work has come up. Iteration 1..." in p.lines
     assert p.clock.now() - started < 60 * 60
     assert r.watcher is None
     ended = json.loads(r.status_file.read_text(encoding="utf-8"))
@@ -648,13 +660,14 @@ def test_a_failed_look_does_not_end_the_wait(project, fake_claude):
 
 
 def test_work_after_a_wait_is_a_new_run(project, fake_claude):
-    p = project(item("alpha", "testing"), autoStart=True, autoStartMinutes=1, maxIterations=1)
+    p = project(item("alpha", "testing"), autoStart=True, autoStartMinutes=1)
     r = p.run()
     r.seen = {"old": {"key": "filed opus", "times": 1}}
-    idling(p, lambda: p.overseer.tracker(p.tracker, "file", "gamma", "Gamma"))
+    # Once its one item is worked, a stop ends the wait that follows.
+    idling(p, lambda: p.overseer.tracker(p.tracker, "file", "gamma", "Gamma"),
+           *[lambda: fake_claude.calls() and r.stop_file.write_text("")] * 200)
     p.play(p.scene(move("gamma", "testing"), result="COMMIT: gamma: looked"))
     assert r.run() == 0
-    # Its one item worked, the limit ends it, however it began.
     assert len(fake_claude.calls()) == 1 and r.iteration == 1 and "old" not in r.seen
     assert "Loop finished; its sessions came to $0.05." in p.lines
 
@@ -671,7 +684,7 @@ def test_stops_at_the_weekly_share(project, fake_claude):
 def test_the_last_usage_is_kept_for_the_worker(project, fake_claude):
     p = project(item("alpha", "ready", complexity="low"))
     p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"))
-    p.go(maxIterations=1)
+    p.go()
     at, rate = accounts.last_usage("w")
     assert at <= p.clock.now()
     assert rate["unifiedWindows"]["five_hour"]["utilization"] == 0.35
@@ -680,7 +693,7 @@ def test_the_last_usage_is_kept_for_the_worker(project, fake_claude):
 def test_the_usage_is_kept_as_it_comes(project, fake_claude):
     # During a session, before it ends: the page shows the worker's usage from this file.
     p = project(item("alpha", "ready", complexity="low"))
-    loop = p.run(maxIterations=1)
+    loop = p.run()
     rate = {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.6}}}
     loop._show(session.Event("rate", data=rate))
     assert accounts.last_usage("w")[1] == rate
@@ -693,12 +706,12 @@ def test_lines_in_the_scripts_colours(project, fake_claude):
     tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]},
             "parent_tool_use_id": None, "session_id": "x"}
     p.play(p.scene(tool, write("built.txt"), move("alpha", "testing"), result="COMMIT: alpha: built"))
-    assert p.run(paint=colours.ansi, maxIterations=1).run() == 0
+    assert p.run(paint=colours.ansi).run() == 0
     coloured = {line for line in p.lines}
     # As run-agent-loop.ps1 writes them: the iteration yellow, the item cyan, a tool call dark grey,
     # the session's figures dark grey, its outcome cyan, a commit dark green, the usage dark cyan,
     # the end green; and the agent's own words in the console's own colour.
-    for colour, start in (("Yellow", " Iteration 1 of 1..."), ("Cyan", " alpha - "), ("DarkGray", "  > Bash: ls"),
+    for colour, start in (("Yellow", " Iteration 1..."), ("Cyan", " alpha - "), ("DarkGray", "  > Bash: ls"),
                           ("DarkGray", "  [success: 3 turns"), ("Cyan", "  alpha: ready -> testing"), ("DarkGreen", "  committed in code: "),
                           ("DarkCyan", "  Usage on account: "), ("Green", "Loop finished;"), ("DarkGray", "  model claude-opus-5-5, session ")):
         prefix = f"[{colours.CODES[colour]}m{start}"

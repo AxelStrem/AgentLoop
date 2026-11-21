@@ -29,7 +29,7 @@
       "worker": "account1",
       "repos": {"quill": "~/src/Quill"},
       "places": {"press": "C:/Program Files/Press"},
-      "settings": {"maxIterations": 5}
+      "settings": {"chainUpTo": 2}
     },
     {
       "name": "orchard",

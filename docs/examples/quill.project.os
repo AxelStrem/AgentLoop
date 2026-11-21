@@ -20,5 +20,5 @@
         }
     }
     - systems = "windows"
-    - settings = "{\"maxIterations\": 10}"
+    - settings = "{\"chainUpTo\": 2}"
 }

@@ -77,7 +77,7 @@ def home(tmp_path, monkeypatch):
     bundle = tmp_path / "home" / "config" / "bundles" / "proj"
     bundle.mkdir(parents=True)
     config.save_json(bundle / "project.json", {"format": 1, "name": "proj", "tracker": {"server": "alice/projects/proj.os"},
-                                               "repos": ["code"], "settings": {"maxIterations": 3}})
+                                               "repos": ["code"], "settings": {"repeatUpTo": 3}})
     account = tmp_path / "account"
     account.mkdir()
     config.save_json(config.paths().settings, {
@@ -427,10 +427,10 @@ def test_a_loop_on_a_tracker_is_shown_from_the_definition_it_kept(home, serve):
     from agentloop import definition, loop as loop_mod
     definition.keep(loop_mod.loop_dir("remote", "t"), "alice/projects/remote.os", {
         "description": "Remote.", "repos": [{"name": "code", "about": "The code"}, {"name": "docs"}], "places": [],
-        "systems": None, "settings": {"maxIterations": 7}}, read_at="2026-11-16T12:00:00+00:00")
+        "systems": None, "settings": {"repeatUpTo": 7}}, read_at="2026-11-16T12:00:00+00:00")
     shown = next(l for l in c.json("GET", "/api/loops")["loops"] if l["name"] == "t")
     assert shown["definition"] == {"repos": ["code", "docs"], "places": []} and shown["about"] == {"code": "The code"}
-    assert shown["definitionRead"] == "2026-11-16T12:00:00+00:00" and shown["effective"]["maxIterations"] == 7
+    assert shown["definitionRead"] == "2026-11-16T12:00:00+00:00" and shown["effective"]["repeatUpTo"] == 7
     assert [m["field"] for m in shown["missing"]] == ["repos.docs"]
     bundled = c.json("POST", "/api/loops", {"loop": loop_entry("b", repos={"code": str(code)})})
     assert bundled["source"] == "bundle" and bundled["definition"] is None
@@ -488,8 +488,8 @@ def test_loops_made_changed_and_deleted(home, serve):
     assert c.json("GET", "/api/loops")["loops"] == []
     made = c.json("POST", "/api/loops", {"loop": loop_entry(settings={"model": "claude-sonnet-5-5"})})
     assert made["name"] == "one" and made["status"]["state"] == "stopped" and made["tracker"]["server"] == "alice/projects/proj.os"
-    # Effective: the bundle's maxIterations, the loop's model.
-    assert made["effective"]["maxIterations"] == 3 and made["effective"]["model"] == "claude-sonnet-5-5"
+    # Effective: the bundle's repeatUpTo, the loop's model.
+    assert made["effective"]["repeatUpTo"] == 3 and made["effective"]["model"] == "claude-sonnet-5-5"
 
     bad = c.json("POST", "/api/loops", {"loop": loop_entry("two", worker="nobody")}, expect=400)
     assert bad["field"] == "loops[1].worker"
@@ -520,7 +520,7 @@ def test_a_copy_of_a_loop_made_and_its_original_kept(home, serve):
     c.json("POST", "/api/loops", {"loop": loop_entry(settings={"chainUpTo": 1})})
     made = c.json("POST", "/api/loops", {"loop": {"name": "two", "like": "one", "repos": {"code": "~/code-2"}}})
     assert (made["like"], made["project"], made["worker"], made["repos"]) == ("one", "proj", "w", {"code": "~/code-2"})
-    assert made["settings"] == {"chainUpTo": 1} and made["effective"]["maxIterations"] == 3
+    assert made["settings"] == {"chainUpTo": 1} and made["effective"]["repeatUpTo"] == 3
     # The file keeps only what the copy gives itself.
     assert config.load_settings().raw["loops"][1] == {"name": "two", "like": "one", "repos": {"code": "~/code-2"}}
 
@@ -540,16 +540,16 @@ def test_the_settings_change_only_from_the_version_read(home, serve):
     c = serve()
     read = c.json("GET", "/api/settings")
     raw = read["settings"]
-    raw["defaults"] = {"maxIterations": 5}
+    raw["defaults"] = {"repeatUpTo": 5}
     done = c.json("PUT", "/api/settings", {"version": read["version"], "settings": raw})
-    assert done["settings"]["defaults"] == {"maxIterations": 5} and done["version"] != read["version"]
+    assert done["settings"]["defaults"] == {"repeatUpTo": 5} and done["version"] != read["version"]
     # The page's copy is now out of date: the second change is refused, and nothing written.
-    raw["defaults"] = {"maxIterations": 6}
+    raw["defaults"] = {"repeatUpTo": 6}
     stale = c.json("PUT", "/api/settings", {"version": read["version"], "settings": raw}, expect=409)
     assert stale["version"] == done["version"]
-    raw["defaults"] = {"maxIterations": "many"}
+    raw["defaults"] = {"repeatUpTo": "many"}
     assert c.json("PUT", "/api/settings", {"version": done["version"], "settings": raw}, expect=400)["field"].startswith("defaults")
-    assert config.load_settings().defaults == {"maxIterations": 5}
+    assert config.load_settings().defaults == {"repeatUpTo": 5}
 
 
 def test_a_bundle_read_and_changed(home, serve):
@@ -557,9 +557,9 @@ def test_a_bundle_read_and_changed(home, serve):
     assert [b["name"] for b in c.json("GET", "/api/bundles")["bundles"]] == ["proj"]
     read = c.json("GET", "/api/bundles/proj")
     raw = read["bundle"]
-    raw["settings"] = {"maxIterations": 9}
+    raw["settings"] = {"repeatUpTo": 9}
     done = c.json("PUT", "/api/bundles/proj", {"version": read["version"], "bundle": raw})
-    assert done["bundle"]["settings"] == {"maxIterations": 9}
+    assert done["bundle"]["settings"] == {"repeatUpTo": 9}
     assert c.json("PUT", "/api/bundles/proj", {"version": read["version"], "bundle": raw}, expect=409)
     raw["name"] = "other"
     assert c.json("PUT", "/api/bundles/proj", {"version": done["version"], "bundle": raw}, expect=400)["field"] == "name"
@@ -678,7 +678,7 @@ def test_a_loop_started_followed_stopped_and_killed(tmp_path, monkeypatch, fake_
         events.until(lambda e: "Stopping as asked." in e.text, timeout=10)
         assert f"Starting the agent loop on {m.project['a']}." in events.text
         # In the script's colours, for the page to draw: the iteration yellow, the item cyan.
-        assert "[93m Iteration 1 of" in events.text and "[96m alpha - " in events.text
+        assert "[93m Iteration 1..." in events.text and "[96m alpha - " in events.text
         assert events.text == m.runner.output("a").text
         last = events.last
 

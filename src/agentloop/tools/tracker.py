@@ -127,11 +127,9 @@ PRIORITY = ['ready', 'planning', 'filed']
 HELD = ['manual', 'asked']
 # The template's complexity: an item with no complexity line has not been judged yet.
 UNASSIGNED = 'unassigned'
-ASKED_LIMIT = 10
 # What the template's claim button says when another loop has the item.
 TAKEN = 'another agent is working on it'
 EMPTY = '[QUEUE_EMPTY] - All actionable agent tasks have been fully cleared.'
-LIMIT = '[QUEUE_EMPTY] - Asked limit has been reached.'
 FIELD = re.compile(r'^(\s*)- (\w+) = (.*?)\s*$')
 
 
@@ -793,7 +791,9 @@ class Queue:
                     self.free.append((stage, f))
         self.free.sort(key=lambda sf: self.rank(sf[1]))
         self.asked = sum(flagged(f, 'asked') for f in items)
-        self.signal = LIMIT if self.asked >= ASKED_LIMIT else EMPTY if not self.free else None
+        # However many items wait on a person, the queue is empty only when nothing is free:
+        # questions piling up are no reason to stop working what can be worked.
+        self.signal = EMPTY if not self.free else None
 
 
     def mine(self, f):
@@ -825,7 +825,7 @@ def queue(t, args):
             mark = '@' if q.mine(f) else '!' if flagged(f, 'first') else '?' if flagged(f, 'discuss') else ' '
             print(f' {mark}{stage:8} {f["handle"]:16} [{f.get("labels", "")}] {f.get("points", "1")} pts '
                   f'{f["complexity"]:10} {f.get("title", "")}')
-    print(f'\nflagged asked: {q.asked} of the limit of {ASKED_LIMIT}')
+    print(f'\nflagged asked: {q.asked}')
     if q.signal:
         print(q.signal)
 

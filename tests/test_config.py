@@ -38,7 +38,7 @@ def test_settings_layer_over_each_other():
     assert result["routes"]["low"] == {"model": "opus", "effort": "medium"}
     assert result["routes"]["high"] == {"model": "sonnet", "effort": "max"}
     assert result["routes"]["trivial"] == config.DEFAULTS["routes"]["trivial"]
-    assert result["maxIterations"] == 20
+    assert result["repeatUpTo"] == 2
     # The defaults are not changed by a layer.
     assert config.DEFAULTS["routes"]["low"] == {"model": "sonnet", "effort": "high"}
 
@@ -138,7 +138,7 @@ def test_a_loop_on_an_unknown_bundle(tmp_path):
         config.load_machine(_write(tmp_path / "settings.json", raw))
     raw["loops"][0]["project"] = "a"
     machine = config.load_machine(_write(tmp_path / "settings.json", raw))
-    assert config.loop_settings(machine, machine.settings.loops[0])["maxIterations"] == 20
+    assert config.loop_settings(machine, machine.settings.loops[0])["repeatUpTo"] == 2
 
 
 def test_save_keeps_unknown_keys_and_order(tmp_path):
@@ -314,7 +314,7 @@ def test_a_copy_takes_what_it_does_not_give_itself(tmp_path):
     copy, original = settings.loop("quill-2"), settings.loop("quill")
     assert (copy.project, copy.worker, copy.like) == ("quill", "account1", "quill")
     assert copy.repos == {"quill": "D:/Work/Quill-2", "extra": "D:/Extra"}
-    assert copy.places == original.places and copy.settings == {"maxIterations": 5}
+    assert copy.places == original.places and copy.settings == {"chainUpTo": 2}
     assert original.like is None
     assert settings.copies("quill") == ["quill-2"] and settings.copies("orchard") == []
 
@@ -326,7 +326,7 @@ def test_a_copys_own_keys_win(tmp_path):
     copy = config.load_settings(_write(tmp_path / "settings.json", raw)).loop("quill-2")
     assert copy.worker == "account2" and copy.places == {"press": "D:/Other"}
     # Laid over the original's as a layer is: routes one by one, the rest replaced.
-    assert copy.settings == {"maxIterations": 5, "chainUpTo": 1, "routes": {
+    assert copy.settings == {"chainUpTo": 1, "routes": {
         "high": {"model": "sonnet", "effort": "max"}, "low": {"model": "opus", "effort": "low"}}}
 
 
@@ -361,8 +361,8 @@ def test_saving_a_copy_keeps_only_its_own_keys(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["loops"][2] == {
         "name": "quill-2", "like": "quill", "repos": {"quill": "D:/Work/Quill-2"}}
     # A change to the original reaches the copy.
-    raw["loops"][0]["settings"] = {"maxIterations": 9}
-    assert config.save_settings(raw, path).loop("quill-2").settings == {"maxIterations": 9}
+    raw["loops"][0]["settings"] = {"repeatUpTo": 9}
+    assert config.save_settings(raw, path).loop("quill-2").settings == {"repeatUpTo": 9}
 
 
 def test_deleting_a_loop_that_has_copies_would_not_load(tmp_path):
@@ -370,3 +370,17 @@ def test_deleting_a_loop_that_has_copies_would_not_load(tmp_path):
     raw["loops"] = raw["loops"][1:]
     with pytest.raises(ConfigError, match='like: no other loop named "quill"'):
         config.save_settings(raw, tmp_path / "settings.json")
+
+
+def test_a_retired_setting_is_accepted_and_dropped(tmp_path):
+    """maxIterations is gone (item no-limits); a file or definition that still says it loads, and
+    saving it again leaves it out."""
+    path = tmp_path / "settings.json"
+    raw = _example_settings()
+    raw["defaults"] = {"maxIterations": 5, "chainUpTo": 1}
+    raw["loops"][0]["settings"] = {"maxIterations": 9}
+    settings = config.save_settings(raw, path)
+    assert settings.defaults == {"chainUpTo": 1} and settings.loop("quill").settings == {}
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["defaults"] == {"chainUpTo": 1} and saved["loops"][0]["settings"] == {}
+    assert "maxIterations" not in config.DEFAULTS

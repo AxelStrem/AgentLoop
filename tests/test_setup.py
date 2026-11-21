@@ -268,8 +268,9 @@ def test_a_failing_setup_keeps_the_loop_from_starting(setting_up, fake_claude):
 
 def test_setup_off_runs_nothing(setting_up, fake_claude):
     p = setting_up(*ITEMS, settings={"setup": "off"})
-    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"))
-    assert p.go(maxIterations=1) == 0
+    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"),
+           p.scene(move("beta", "testing"), result="COMMIT: beta: built"))
+    assert p.go() == 0
     assert not (setup.env_dir("proj") / "runs.txt").exists()
     call = next(c for c in fake_claude.calls() if "prompt" in c)
     assert call["env"].get("PROJECT_THING") is None

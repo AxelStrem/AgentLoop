@@ -39,7 +39,6 @@ def _parser() -> argparse.ArgumentParser:
                        help="first start again the loops cut off mid-run, as a container's are when it is stopped")
     run = sub.add_parser("run", help="run one loop in the terminal, as run-agent-loop.ps1 does")
     run.add_argument("loop", help="the loop's name, in the settings; import-psd1 names it after its project")
-    run.add_argument("--max-iterations", type=int, help="how many items to work, at most (maxIterations)")
     run.add_argument("--model", help="every session on this model, at its default effort (model)")
     run.add_argument("--worker", help="this run on another worker of the settings: another Claude account")
     run.add_argument("--colour", choices=["auto", "always", "never"], default="auto",
@@ -260,7 +259,7 @@ def _run(args: argparse.Namespace) -> int:
         # Started by the runner, it may meet a page asking whether its lock is free, for
         # the moment that takes: so it tries for a little while before it gives up.
         run = loop.Run(machine, found, out=lambda line: print(line, flush=True), paint=paint, worker=args.worker,
-                       overrides={"maxIterations": args.max_iterations, "model": args.model},
+                       overrides={"model": args.model},
                        lock_wait=2.0 if args.managed else 0.0, setup_only=args.setup_only,
                        again=getattr(args, "again", False) or (args.managed and args.setup_only))
         return run.dry(args.item) if args.dry else run.run()
@@ -588,7 +587,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "setup":
         # A run that sets the project up and ends, in the terminal (item project-setup).
         args.managed = args.dry = False
-        args.item = args.max_iterations = args.model = args.worker = None
+        args.item = args.model = args.worker = None
         args.setup_only = True
         return _run(args)
     if args.command == "accounts":

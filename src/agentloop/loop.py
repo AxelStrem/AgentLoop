@@ -62,6 +62,9 @@ Differences from the script, each deliberate:
   which repository and files, and what to do (item push-conflict). That
   phase is a line of attempts.jsonl of kind `merge`, and no work record on the item. A commit's
   hash in attempts.jsonl is the one it was made with, before any replay.
+- A run has no limit on its items, and the queue none on the items flagged asked (item no-limits):
+  it works until nothing on the tracker can be worked, or something else ends it. The script stops
+  after `-MaxIterations` items, and on ten items flagged asked.
 - Only Windows has been tried: this machine is Windows.
 """
 
@@ -1166,8 +1169,6 @@ class Run:
         nxt = None
         if chained + 1 >= self._s("chainUpTo"):
             why = f"this session has worked {self._s('chainUpTo')} items"
-        elif self.iteration >= self._s("maxIterations"):
-            why = f"the run has worked its {self._s('maxIterations')} items"
         elif self.session_context > self._s("chainContextUpTo"):
             why = f"its context is {round(self.session_context / 1000)}k tokens"
         elif self.stop_file.exists() or self.kill_file.exists():
@@ -1286,10 +1287,9 @@ class Run:
         self.started_at = datetime.fromtimestamp(self.clock.now()).strftime("%Y%m%d-%H%M%S")
         if self.setup_only:
             return self._setup_alone()
-        max_iterations = self._s("maxIterations")
         self.say(f" Starting the agent loop on {self.project}. To stop it once the item at work is done, make the file {self.stop_file} - or at once, {self.kill_file}", "Cyan")
         status = 0
-        while self.iteration < max_iterations:
+        while True:
             # The script's mutex, had again once the loop of the project that had it has ended.
             if self.lock:
                 self.lock.retake()
@@ -1313,7 +1313,7 @@ class Run:
                 break
             self.iteration += 1
             self.say("----------------------------------------", "Yellow")
-            self.say(f" Iteration {self.iteration} of {max_iterations}...", "Yellow")
+            self.say(f" Iteration {self.iteration}...", "Yellow")
             self.say("----------------------------------------", "Yellow")
 
             item = self.read_next()
@@ -1372,7 +1372,7 @@ class Run:
                 kind = "discuss" if item.get("discuss") else "build" if item.get("stage") == "ready" else "triage"
                 self.out("")
                 self.say(f" {item['handle']} - {item.get('title')}", "Cyan")
-                self.say(f"  {kind}, at {item.get('stage')}, in the same session, as it asked (item {self.iteration} of {max_iterations})", "Cyan")
+                self.say(f"  {kind}, at {item.get('stage')}, in the same session, as it asked (item {self.iteration})", "Cyan")
             if stopping:
                 status = 0 if self._stopped_cleanly() else 1
                 break
@@ -1404,8 +1404,8 @@ class Run:
 
     def _idle(self) -> dict | None:
         """Waits, spending no session, until `tracker.py next` offers an item, and returns it; None
-        when a stop, a kill or the toggle turned off ends the wait. Both signals wait: the owner's
-        answers free a queue stopped at the asked limit as new items free an empty one. A failed
+        when a stop, a kill or the toggle turned off ends the wait. New items, and the owner's
+        answers to items flagged asked, are what free it. A failed
         look is tried again at the next: a server away for a moment is no reason to end a loop that
         has nothing to do. The script has nothing like this; it ends on the signal.
 
@@ -1483,7 +1483,7 @@ class Run:
         self.iteration = 1
         self.seen = {}
         self.say("----------------------------------------", "Yellow")
-        self.say(f" Work has come up. Iteration 1 of {self._s('maxIterations')}...", "Yellow")
+        self.say(f" Work has come up. Iteration 1...", "Yellow")
         self.say("----------------------------------------", "Yellow")
 
     # A changed definition (item doc-change). The script has nothing like it: its projects are

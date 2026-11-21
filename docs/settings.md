@@ -393,7 +393,6 @@ One set of keys, wherever they are written:
 | `buildAfterTriage` | `["medium", "high"]` | `$BuildAfterTriage` |
 | `buildInTriageUpTo` | `2` | `$BuildInTriageUpTo` |
 | `trial` | the script's, or `null` for none: `{"until": "2026-10-29", "complexity": "medium", "upTo": 3, "route": {...}}` | `$Trial` |
-| `maxIterations` | `20` | `-MaxIterations` |
 | `stopAtWeeklyUse` | `1.0` | `-StopAtWeeklyUse` |
 | `askEveryMinutes` | `30` | `-AskEveryMinutes` |
 | `chainUpTo` | `3` | `-ChainUpTo` |
@@ -409,6 +408,12 @@ One set of keys, wherever they are written:
 
 A route is `{"model": "opus", "effort": "medium"}`.
 
+A run has no limit on how many items it works, and items flagged `asked` never stop it, however
+many there are (item no-limits): it goes on until nothing on its tracker can be worked, or a stop,
+a kill, `stopAtWeeklyUse`, a failed session or an item left at the same stage `repeatUpTo` times ends
+it. The script's `-MaxIterations` and its limit of ten asked items have no setting here. A
+`maxIterations` still written in a settings file or a project's definition is accepted and ignored.
+
 With `autoStart` on (item auto-start, the Auto button in the loop's row), a loop that finds nothing
 to work does not end: it stays alive, `idle`, and asks the tracker what comes next every
 `autoStartMinutes`, which spends no session. It also listens for changes to its tracker on the
@@ -418,7 +423,7 @@ seconds, and a burst of edits is one look. The set times stay as the fallback: f
 the stream or a stream that dropped (it is opened again after a pause that grows), and for an item
 freed by one closed in another project's tracker, which this tracker's stream does not tell of. The
 page's row says `on any change` while the stream is heard. It holds its run lock and the script's
-mutex while it waits, as a running loop does. An item that comes up begins a new run, its `maxIterations` and
+mutex while it waits, as a running loop does. An item that comes up begins a new run, its
 repeats counted afresh. A stop or a kill ends the wait at once, and so does turning the setting off,
 which a running loop reads from this file; everything else that ends a loop still ends it, and a
 loop that has ended is not started again.

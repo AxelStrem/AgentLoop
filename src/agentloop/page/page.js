@@ -14,7 +14,6 @@ const SETTINGS = {
   buildAfterTriage: "The complexities a triage that leaves its item ready goes straight on to build, in the same session.",
   buildInTriageUpTo: "A triage goes on to build an item of this many points or fewer, whatever its complexity.",
   trial: "Until a date, builds of one complexity up to some points go on another route, to try it.",
-  maxIterations: "How many items a run works, at most.",
   stopAtWeeklyUse: "Stop between items once this share of the week's allowance is used; 1 never stops early.",
   askEveryMinutes: "While a usage limit is waited out, how often to ask whether it has lifted sooner.",
   chainUpTo: "How many items one session may work, going on to the one it asks for.",
@@ -30,7 +29,7 @@ const SETTINGS = {
 };
 const COMPLEXITIES = ["trivial", "low", "medium", "high", "unassigned"];
 const ROUTE_KEYS = ["triage", ...COMPLEXITIES];
-const INTEGERS = ["buildInTriageUpTo", "maxIterations", "chainUpTo", "repeatUpTo", "chainContextUpTo", "pushTries"];
+const INTEGERS = ["buildInTriageUpTo", "chainUpTo", "repeatUpTo", "chainContextUpTo", "pushTries"];
 // The SGR codes colours.py writes, by the class the page draws each in.
 const SGR = {
   30: "black", 31: "darkred", 32: "darkgreen", 33: "darkyellow", 34: "darkblue", 35: "darkmagenta", 36: "darkcyan", 37: "gray",

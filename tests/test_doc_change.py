@@ -115,7 +115,7 @@ def test_accept_definition_is_auto_or_ask(tmp_path):
 
 def test_the_diff_names_what_changed():
     old = {"description": "One.\nTwo.\nThree.", "repos": [{"name": "code", "about": "The code"}, {"name": "docs"}],
-           "places": [{"name": "samples"}], "systems": None, "settings": {"chainUpTo": 1, "maxIterations": 5}}
+           "places": [{"name": "samples"}], "systems": None, "settings": {"chainUpTo": 1, "repeatUpTo": 5}}
     new = {"description": "One.\nTwo, changed.\nThree.", "repos": [{"name": "code", "about": "All the code"}, {"name": "extra"}],
            "places": [{"name": "samples"}], "systems": ["linux"], "settings": {"chainUpTo": 2, "push": True}}
     d = definition.diff(old, new)
@@ -124,7 +124,7 @@ def test_the_diff_names_what_changed():
                           "changed": [{"name": "code", "old": "The code", "new": "All the code"}]}
     assert d["places"] == {"added": [], "removed": [], "changed": []}
     assert d["systems"] == {"old": None, "new": ["linux"]}
-    assert d["settings"] == {"added": {"push": True}, "removed": {"maxIterations": 5},
+    assert d["settings"] == {"added": {"push": True}, "removed": {"repeatUpTo": 5},
                              "changed": {"chainUpTo": {"old": 1, "new": 2}}}
     lines = definition.diff_lines(d)
     assert "+ repository extra" in lines and "- repository docs" in lines

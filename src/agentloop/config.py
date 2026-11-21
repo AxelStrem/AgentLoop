@@ -49,7 +49,6 @@ DEFAULTS: dict[str, Any] = {
     "buildAfterTriage": ["medium", "high"],
     "buildInTriageUpTo": 2,
     "trial": {"until": "2026-10-29", "complexity": "medium", "upTo": 3, "route": {"model": "sonnet", "effort": "high"}},
-    "maxIterations": 20,
     "stopAtWeeklyUse": 1.0,
     "askEveryMinutes": 30,
     "chainUpTo": 3,
@@ -71,6 +70,12 @@ DEFAULTS: dict[str, Any] = {
     # tools already. The machine's to say, as acceptDefinition is.
     "setup": "auto",
 }
+
+# Settings the app had once and has no more: still accepted where they were written - a machine's
+# settings.json, a project's definition on the server - and dropped as they are read, so that a
+# setting made obsolete never stops a loop from starting. maxIterations ended a run after so many
+# items; a run now works until nothing can be worked (item no-limits).
+RETIRED = ("maxIterations",)
 
 # What acceptDefinition may be.
 ACCEPT_DEFINITION = ("auto", "ask")
@@ -184,11 +189,14 @@ def _check_route(where: str, field: str, value: Any) -> None:
 
 
 def check_run_settings(where: str, field: str, settings: Any) -> None:
-    """One layer of run settings: only known keys, each of its type."""
+    """One layer of run settings: only known keys, each of its type. A retired key is taken out of
+    the layer, which is how it is dropped wherever settings are read, and from a file saved again."""
     if settings is None:
         return
     if not isinstance(settings, dict):
         raise ConfigError(where, field, "the run settings are an object")
+    for key in RETIRED:
+        settings.pop(key, None)
     for key, value in settings.items():
         at = f"{field}.{key}"
         if key not in DEFAULTS:

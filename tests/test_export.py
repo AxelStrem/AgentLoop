@@ -227,7 +227,7 @@ def test_the_docs_example_definition_reads(overseer, tmp_path):
 
     got = definition.project(tracker, definition.fetch(overseer.url, overseer.key, tracker))
     assert got.name == "quill" and got.repo_names() == ["quill"] and got.places == ["press"]
-    assert got.systems == ["windows"] and got.settings == {"maxIterations": 10}
+    assert got.systems == ["windows"] and got.settings == {"chainUpTo": 2}
     raw = definition.fetch(overseer.url, overseer.key, tracker)
     definition.place_tools(raw, tmp_path, definition.file_getter(overseer.url, overseer.key, tracker))
     assert (tmp_path / "tools" / "look.py").read_bytes() == tool
