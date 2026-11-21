@@ -393,7 +393,8 @@ On the page, each loop's **Copy** opens a new loop with `like` set, asking for i
 folders of its repositories; the other fields show what is copied, greyed, and can be set here.
 
 **Several loops on one project** run at once, each in its own clones, and claims keep them from
-taking the same item (item `tracker-claim`). Starting one beside a loop of the project that commits
+taking the same item (item `tracker-claim`). The tracker's page frames a claimed item in green,
+with the name of the agent at work - its model and effort - over it. Starting one beside a loop of the project that commits
 in a repository it does (their placed tops overlap) is refused, with the other loop named: each
 commits in its own.
 
