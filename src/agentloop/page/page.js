@@ -213,6 +213,19 @@ function workerOf(name) {
 
 // The loops
 
+// Items tagged for bots no running loop here signs in as (item assign-bot): each loop says the
+// account it is and what it saw held for other bots, and the page can only know this machine's
+// loops - a loop elsewhere may well run the bot.
+function unrunBots(loop) {
+  const others = loop.status.others || [];
+  if (!others.length) return [];
+  const tracker = trackerText(loop.tracker);
+  const running = new Set(state.loops
+    .filter((l) => l.status.alive && l.status.account && trackerText(l.tracker) === tracker)
+    .map((l) => l.status.account));
+  return others.filter((o) => !(o.bots || []).some((b) => running.has(b)));
+}
+
 function renderLoops() {
   const body = $("loops");
   body.replaceChildren();
@@ -231,6 +244,12 @@ function renderLoops() {
     }
     if (s.state === "failed" && s.error) stateCell.push(h("span", { class: "problem", text: s.error }));
     if (s.busy) stateCell.push(h("span", { class: "sub", text: s.busy }));
+    const unrun = unrunBots(loop);
+    if (unrun.length) {
+      stateCell.push(h("span", { class: "chip warn",
+        title: `Tagged for bots no running loop on this machine signs in as - a loop on another machine may run them:\n${unrun.map((o) => `${o.handle} (${o.bots.join(", ")})`).join("\n")}`,
+        text: `${unrun.length === 1 ? "1 item" : unrun.length + " items"} for bots not run here` }));
+    }
     // The project's setup script (item project-setup): a failed run with the end of its output,
     // and one still to run said, for no session runs until it has succeeded.
     const setupState = (loop.setup || {}).state;

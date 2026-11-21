@@ -101,6 +101,10 @@ class LoopStatus:
     error: str | None = None
     # Set when the project is being worked by something else: another loop on it, or the script.
     busy: str | None = None
+    # The Overseer account its key signs in as, once an item names a bot, and the items tagged
+    # for other bots, as {handle, bots} (item assign-bot).
+    account: str | None = None
+    others: list | None = None
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)

@@ -4,7 +4,9 @@
     python tracker.py next [--prefer <handle>] [--owner <name>]
                                                the first of those, or the signal, as JSON - or the
                                                item preferred, if it is free to take; with --owner,
-                                               that user's items come before everything flagged first
+                                               that user's items come before everything flagged first;
+                                               an item tagged bot-<username> is only for the loops
+                                               whose key signs in as that account
     python tracker.py claim <handle> [--worker <name>]
                                                mark an item as an agent loop's to work - refused
                                                if another loop has it - as JSON, with the name of
@@ -740,6 +742,17 @@ def held(item):
     return [flag for flag in HELD if flagged(item, flag)]
 
 
+#: The prefix of a tag naming a bot an item is for (item assign-bot): `bot-<username>`, the
+#: username being the Overseer account a loop's key signs in as. The owner adds one to Labels for
+#: each bot; an item with any is free only to the loops of those accounts.
+BOT_TAG = 'bot-'
+
+
+def bots(item):
+    """The accounts an item is for, by its bot tags: empty when it is for any loop."""
+    return [l[len(BOT_TAG):] for l in split(item.get('labels')) if l.startswith(BOT_TAG) and len(l) > len(BOT_TAG)]
+
+
 def claimed(item):
     """Whether an agent loop is working on an item: the template's hidden `working`."""
     return item.get('working') == 'true'
@@ -766,11 +779,16 @@ class Queue:
 
     A worker with a manager passes the manager's username as `owner`: the items whose `owner` it is
     then come before everything flagged first - owned and first, owned, others' first, the rest.
-    The script has no manager, so without `owner` the order is exactly the script's."""
+    The script has no manager, so without `owner` the order is exactly the script's.
+
+    An item tagged for bots (`bot-<username>`) is free only to a loop whose key signs in as one
+    of them; to any other it is held for those bots, in `others`, and is neither free nor taken
+    by `--prefer`. Who the loop is - `me` - is asked of the server only when an item names a bot."""
 
     def __init__(self, t, owner=None):
         self.owner = owner
         items = [f for _, _, f in t.items()]
+        self.me = t.server.me() if any(bots(f) for f in items) else None
         open_handles = {f.get('handle') for f in items}
         holds = {h: sum(h in split(f.get('after')) for f in items) for h in open_handles}
         self.by_stage = {}
@@ -781,7 +799,7 @@ class Queue:
             points = str(f.get('points', '1'))
             return -holds.get(f.get('handle'), 0), int(points) if points.isdigit() else 1
 
-        self.free, self.waiting, self.held, self.claimed = [], [], [], []
+        self.free, self.waiting, self.held, self.claimed, self.others = [], [], [], [], []
         for stage in PRIORITY:
             for f in sorted(self.by_stage.get(stage, []), key=order):
                 if claimed(f):
@@ -790,6 +808,8 @@ class Queue:
                     self.held.append((stage, f))
                 elif waits := waiting_on(t, f, items):
                     self.waiting.append((stage, f, waits))
+                elif (named := bots(f)) and self.me not in named:
+                    self.others.append((stage, f, named))
                 else:
                     self.free.append((stage, f))
         self.free.sort(key=lambda sf: self.rank(sf[1]))
@@ -817,6 +837,10 @@ def queue(t, args):
         print(f'  waiting  {stage:8} {f["handle"]:16} on {", ".join(waits)}')
     for stage, f in q.claimed:
         print(f'  claimed  {stage:8} {f["handle"]:16} an agent loop is working on it')
+    for stage, f, named in q.others:
+        print(f'  for      {stage:8} {f["handle"]:16} held for bot {", ".join(named)}')
+    if q.me:
+        print(f'this loop signs in as {q.me}: items tagged {BOT_TAG}{q.me}, or with no bot tag, are its to take')
     print()
     if q.free:
         print('free to take, in the order a loop takes them ' +
@@ -842,8 +866,12 @@ def next_item(t, args):
     manager's items, when `--owner` names one. Otherwise the queue's own first, as if nothing had
     been asked."""
     q = Queue(t, args.owner)
+    # Who this loop is, and what is held for other bots, for the page to warn about an item
+    # whose bot no loop runs: on the signal too, since a loop with nothing left is one to warn.
+    bot = ({'me': q.me} if q.me else {}) | (
+        {'others': [{'handle': f['handle'], 'bots': named} for _, f, named in q.others]} if q.others else {})
     if q.signal:
-        print(json.dumps({'signal': q.signal}))
+        print(json.dumps({'signal': q.signal} | bot))
         return
     stage, f = q.free[0]
     wanted = next(((s, g) for s, g in q.free if g['handle'] == args.prefer), None) if args.prefer else None
@@ -852,7 +880,7 @@ def next_item(t, args):
     print(json.dumps({'handle': f['handle'], 'stage': stage, 'complexity': f['complexity'],
                       'flags': f['flags'], 'discuss': flagged(f, 'discuss'),
                       'points': f.get('points', '1'), 'title': f.get('title', ''),
-                      'preferred': bool(args.prefer) and f['handle'] == args.prefer}))
+                      'preferred': bool(args.prefer) and f['handle'] == args.prefer} | bot))
 
 
 #: How many closed parts, and closed siblings, `show` lists - the most recently closed. A large

@@ -1048,3 +1048,15 @@ def test_a_dry_start_while_the_loop_runs(project, fake_claude):
 
 def test_figures_as_powershell_writes_them():
     assert loop.figure(0.0) == "0" and loop.figure(1.5) == "1.5" and loop.figure(round(0.3686, 2)) == "0.37" and loop.figure(12.0) == "12"
+
+
+# Bot tags (item assign-bot)
+
+def test_items_for_other_bots_reach_the_status_for_the_page(project, fake_claude):
+    p = project(item("theirs", "ready", complexity="low", labels="bot-someone"))
+    assert p.go() == 0
+    assert fake_claude.calls() == []
+    assert "[QUEUE_EMPTY] - All actionable agent tasks have been fully cleared." in p.lines
+    status = json.loads(p.r.status_file.read_text(encoding="utf-8"))
+    assert status["account"] == "agent"
+    assert status["others"] == [{"handle": "theirs", "bots": ["someone"]}]

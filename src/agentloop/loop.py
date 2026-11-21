@@ -607,7 +607,14 @@ class Run:
         """`tracker.py next`: the item to take, or the signal. A worker with a manager asks for that
         user's items first; every `next` goes through here so that the three cannot differ."""
         owner = ("--owner", self.worker.manager) if self.worker.manager else ()
-        return self.read_tracker("next", *args, *owner)
+        answer = self.read_tracker("next", *args, *owner)
+        # The account the loop signs in as, and the items tagged for other bots (item
+        # assign-bot), for the page to warn about a bot no loop here runs. Each answer replaces
+        # the last, so a tag taken off clears the warning. A dry run, whose status a run never
+        # began, writes none.
+        if answer is not None and self.status:
+            self._status(account=answer.get("me"), others=answer.get("others") or [])
+        return answer
 
     def _tracker_text(self, *args: str) -> str:
         # Its lines joined with a line feed, as PowerShell's -join gives them, whatever line ends

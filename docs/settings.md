@@ -242,6 +242,20 @@ When the server or the key file is not the worker's, the loop carries them as it
 account it runs on.
 
 
+### Items for one bot
+
+An item can be kept for particular bots with a project tag `bot-<username>`, where `<username>`
+is the Overseer account the bot's key signs in as (what `/account/me` answers, the name in the
+project's People). The owner adds one such tag to the tracker's Labels for each bot, then puts it
+on the items that bot should work. An item with bot tags is free only to the loops whose key signs
+in as one of those accounts. Other loops never take it, not even through a session's `NEXT:`, and
+their `tracker.py queue` lists it as `held for bot <names>`. An item with no bot tag is open to
+every loop, as before. A loop that sees items held for other bots writes them, with its own
+account, into its status. The page then marks its row with `N items for bots not run here` when
+no running loop on this machine, on the same tracker, signs in as any of those bots. A loop on
+another machine may still run them, so this is a warning and nothing more.
+
+
 ### When the definition changes
 
 A definition can change while a loop runs on it (item `doc-change`). A tool's sha256 is part of it,
