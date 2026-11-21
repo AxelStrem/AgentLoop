@@ -72,8 +72,9 @@ The template is not in Community Applications; adding it by its address is all i
   folder by hand, under `/code` too. Nothing under it is chowned, and sessions write as `PUID`, so
   the files they make belong to you. Two projects with a repository of the same name and different
   addresses need one of the two given another folder by hand.
-- **An SSH key** for git goes in `/data/home/.ssh` (the key, and a `known_hosts` beside it), mode
-  600, owned by `PUID`.
+- **An SSH key** for git goes in `/data/home/.ssh`, mode 600, owned by `PUID`. A GitHub address
+  is cloned, fetched and pushed in the form, HTTPS or SSH, the container signs in with: an SSH key,
+  `GIT_TOKEN`, or both ([settings.md](settings.md), "HTTPS or SSH").
 - **System packages:** the image has git, Node, `claude`, a compiler and linker
   (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, `unzip`, and the libraries headless Chrome
   needs.

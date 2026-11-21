@@ -6,8 +6,9 @@ folder asked for, instead of asking where a clone already is. That folder is one
 missing or empty, and then it is cloned into; already a clone of that address, and then it is used
 as it is; or anything else, which is refused by name and never touched.
 
-The clone is the person's own git with their own credentials. One that fails - no access to a
-private repository, say - says which repository and stops; nothing is retried another way. The
+The clone is the person's own git with their own credentials. A GitHub address is cloned in the
+form, HTTPS or SSH, this machine signs in with (item git-protocol, gitauth.py). One that fails - no
+access to a private repository, say - says which repository and stops; nothing is retried. The
 default folder offered is beside the others the person picked, else `<AGENTLOOP_CODE>/<repo>` on a
 machine that names one folder for every clone, else `<home>/<project>/<repo>` under this
 machine's home: never a path from anyone else's machine.
@@ -21,7 +22,7 @@ import subprocess
 import urllib.parse
 from pathlib import Path
 
-from agentloop import config
+from agentloop import config, gitauth
 
 # Long enough for a large repository on a slow line; a clone that takes longer is said to have.
 TIMEOUT = 600.0
@@ -124,6 +125,7 @@ def clone(name: str, folder: Path, url: str, branch: str = "", *, interactive: b
     if state(name, folder, url) == CLONE:
         return False
     folder.parent.mkdir(parents=True, exist_ok=True)
+    url = gitauth.usable(url)
     args = ["clone", *(["--branch", branch] if branch else []), "--", url, str(folder)]
     done = _git(*args, interactive=interactive, timeout=timeout)
     if done.returncode != 0:
