@@ -250,6 +250,34 @@ def test_a_resolution_that_changes_nothing_drops_the_commit(remote):
     assert git(b, "rev-parse", "HEAD") == git(remote.bare, "rev-parse", "main")
 
 
+def test_a_rebase_that_cannot_go_on_stops_rather_than_skipping_for_ever(remote, monkeypatch):
+    # Seen under a parallel test run: a rebase that stopped with nothing conflicted and its todo list
+    # never written, so that every `rebase --skip` failed and the replay skipped for ever.
+    a, b = remote.clone("a"), remote.clone("b")
+    commit(a, "notes.md", "from a\n", "a's work")
+    publish(a)
+    commit(b, "notes.md", "from b\n", "b's work")
+    head = git(b, "rev-parse", "HEAD")
+    run = sync._git
+
+    def half_written(repo, *args, **kwargs):
+        done = run(repo, *args, **kwargs)
+        if args[:2] == ("rebase", "-q"):
+            git(repo, "reset", "-q", "--hard")
+            state = Path(repo) / git(repo, "rev-parse", "--git-path", "rebase-merge").strip()
+            (state / "git-rebase-todo").unlink()
+        return done
+
+    monkeypatch.setattr(sync, "_git", half_written)
+    said = Said()
+    stopped = sync.push([b], remote.tmp / "wt", never, said)
+    assert stopped is not None and stopped.repo == b and "could not go on" in stopped.why
+    assert remote.log() == ["a's work", "start"]
+    assert git(b, "rev-parse", "HEAD") == head
+    assert said.lines[-1].endswith("The commits are left local.")
+    assert not (remote.tmp / "wt" / "b").exists()
+
+
 def test_a_push_refused_is_tried_again(remote, monkeypatch):
     a, b = remote.clone("a"), remote.clone("b")
     commit(b, "other.md", "from b\n", "b's work")

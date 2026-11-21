@@ -126,6 +126,16 @@ def paths() -> Paths:
     return Paths(_xdg("XDG_CONFIG_HOME", ".config") / "agentloop", _xdg("XDG_STATE_HOME", ".local/state") / "agentloop")
 
 
+def script_mutex(name: str) -> str:
+    """The name of run-agent-loop.ps1's Windows mutex `name` - `Local\\run-agent-loop-<name>`, which
+    the app takes too, so that it and the script keep out of each other's way. With
+    AGENTLOOP_MUTEX_TAG set, the tag goes on the end: the tests set it for each process they run in,
+    and the loops they start inherit it, so that test runs side by side, and a real loop on the same
+    PC, never hold each other's mutexes. Nothing else sets it."""
+    tag = os.environ.get("AGENTLOOP_MUTEX_TAG")
+    return f"Local\\run-agent-loop-{name}" + (f"-{tag}" if tag else "")
+
+
 def this_system() -> str:
     """This OS, as a bundle's `systems` names it."""
     if sys.platform == "win32":

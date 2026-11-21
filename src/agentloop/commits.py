@@ -32,8 +32,8 @@ from typing import Iterator
 
 from agentloop import config
 
-# The name run-agent-loop.ps1 gives its commit mutex.
-SCRIPT_MUTEX = "Local\\run-agent-loop-commit"
+# run-agent-loop.ps1's commit mutex, `Local\run-agent-loop-commit`, as config.script_mutex names it.
+SCRIPT_MUTEX = "commit"
 
 # How many lines of a repository's status the prompt gives before it says how many more there are.
 STATUS_LINES = 40
@@ -110,7 +110,7 @@ def _script_mutex() -> Iterator[None]:
     kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
     kernel.ReleaseMutex.argtypes = (wintypes.HANDLE,)
     kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
-    mutex = kernel.CreateMutexW(None, False, SCRIPT_MUTEX)
+    mutex = kernel.CreateMutexW(None, False, config.script_mutex(SCRIPT_MUTEX))
     if not mutex:
         # The file lock still keeps the app's loops apart; only the script's would go unheeded.
         yield

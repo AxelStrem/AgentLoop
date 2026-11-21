@@ -63,6 +63,20 @@ def _git_without_fsmonitor():
         else:
             os.environ[k] = v
 
+@pytest.fixture(scope="session", autouse=True)
+def _mutexes_of_our_own():
+    """The script's Windows mutexes, named for this process: test processes running at once (pytest
+    -n), and the loops they start, which inherit it, never find a project held by each other - every
+    test's project is `proj` - nor by a real loop on this PC (config.script_mutex)."""
+    saved = os.environ.get("AGENTLOOP_MUTEX_TAG")
+    os.environ["AGENTLOOP_MUTEX_TAG"] = f"test-{os.getpid()}"
+    yield
+    if saved is None:
+        os.environ.pop("AGENTLOOP_MUTEX_TAG", None)
+    else:
+        os.environ["AGENTLOOP_MUTEX_TAG"] = saved
+
+
 @pytest.fixture
 def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeClaude:
     bin_dir = tmp_path / "fake-bin"
@@ -176,12 +190,18 @@ def overseer_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Overse
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     url = f"http://127.0.0.1:{port}"
     try:
+        # Up once it answers at all: /documents refuses a caller with no key, and a refusal is an
+        # answer. Only a connection that fails is tried again.
         for _ in range(150):
             try:
                 urllib.request.urlopen(f"{url}/documents", timeout=5).read()
                 break
-            except Exception:
+            except urllib.error.HTTPError:
+                break
+            except OSError:
                 time.sleep(0.2)
+        else:
+            pytest.fail(f"{OVERSEER_SERVER.name} did not answer on {url} within 30 seconds")
         _hands_out_templates(url)
         yield Overseer(url, root, key)
     finally:

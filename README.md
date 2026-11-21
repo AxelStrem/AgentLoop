@@ -6,7 +6,7 @@ each loop, several at once on different Claude accounts, and shows each one's ou
 
 It needs:
 
-- **Python 3.11 or newer.** Nothing else from PyPI; `pytest` is for the tests only.
+- **Python 3.11 or newer.** Nothing else from PyPI; `pytest` and `pytest-xdist` are for the tests only.
 - **git**, on `PATH`.
 - **Claude Code** (`claude`), on `PATH` or named in the settings, logged in to each account a loop
   will use.
@@ -146,8 +146,10 @@ a loop can change. [docs/examples/](docs/examples/) has examples of both.
 
 ```sh
 pip install -e .[test]
-python -m pytest -q
+python -m pytest -q -n auto
 ```
+
+`-n auto` runs the suite on every core (pytest-xdist); without it, the tests run one after another.
 
 The tests never run a real Claude session or reach a live server. They use a fake `claude`
 (`tests/fake_claude`) that answers with a recorded session, and serve a copy of a tracker on

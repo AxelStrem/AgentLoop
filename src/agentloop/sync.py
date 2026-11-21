@@ -259,6 +259,11 @@ def replay(repo: Path, up: Upstream, worktree: Path, resolve: Resolve, say: Say)
                 # which is dropped, as a rebase drops one already upstream.
                 if _git(worktree, "diff", "--cached", "--quiet").returncode == 0:
                     done = _git(worktree, "rebase", "--skip")
+                    # A skip that fails with nothing conflicted moved nothing on - a rebase whose
+                    # state git could not finish writing, say - and would only fail again.
+                    if done.returncode != 0 and _rebasing(worktree) and not _unmerged(worktree):
+                        say(f"  {repo.name}: the replay onto {up} could not go on (git exit {done.returncode}). The commits are left local.", "Red")
+                        return Stopped(repo, up, f"the replay could not go on (git exit {done.returncode})")
                     continue
                 say(f"  {repo.name}: the replay onto {up} stopped (git exit {done.returncode}). The commits are left local.", "Red")
                 return Stopped(repo, up, f"the replay stopped (git exit {done.returncode})")

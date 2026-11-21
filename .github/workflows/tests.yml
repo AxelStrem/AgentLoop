@@ -3,8 +3,7 @@
 # The repository is private for now, where a macOS minute costs ten Linux ones and a Windows minute
 # two. So a push to main, and a run started by hand, test on all three systems. Every other push
 # and every pull request test on Linux alone. A tag is not tested again: it names a commit the push
-# to its branch tested already. The suite runs on every core of the runner (pytest-xdist), but on
-# Windows.
+# to its branch tested already. The suite runs on every core of the runner (pytest-xdist).
 #
 # The tests serve their trackers with overseer-server, which also hands tracker.py the project
 # template from the library it was built beside. Without it, most of the suite skips, and a run
@@ -84,10 +83,7 @@ jobs:
       # -rs lists every skipped test and why, so a test that skipped where it should have run is
       # seen in the log. A test still running after five minutes has hung: its stack is printed,
       # and the job's timeout ends the run.
-      # In parallel but on Windows, where a loop takes the script's machine-wide mutex for its
-      # project, and the tests' projects share one name.
+      # On Windows too: each test process names the script's machine-wide mutexes for itself
+      # (tests/conftest.py), so the tests' projects, which share one name, keep out of each other's way.
       - name: Run the tests
-        run: |
-          workers=auto
-          if [ "$RUNNER_OS" = "Windows" ]; then workers=0; fi
-          python -m pytest -q -rs -n "$workers" -o faulthandler_timeout=300
+        run: python -m pytest -q -rs -n auto -o faulthandler_timeout=300

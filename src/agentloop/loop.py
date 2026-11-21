@@ -320,7 +320,7 @@ class ScriptMutex:
         kernel.ReleaseMutex.argtypes = (wintypes.HANDLE,)
         kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
         self._kernel = kernel
-        self._mutex = kernel.CreateMutexW(None, False, f"Local\\run-agent-loop-{project.lower()}")
+        self._mutex = kernel.CreateMutexW(None, False, config.script_mutex(project.lower()))
         if not self._mutex:
             # As before: a mutex that cannot be made keeps nobody out.
             self.held = True
