@@ -224,12 +224,15 @@ flag still needed and saves nothing.
 
 A repository the definition gives an address, its `url` and maybe a `branch` (item `clone`), shows
 that address beside its folder, and the folder is offered: beside the folder given for another of
-the project's repositories, else `<home>/<project>/<repo>` under this machine's home. **Clone here**
+the project's repositories, else `<AGENTLOOP_CODE>/<repo>` where that variable names the machine's
+one folder of clones (the container's `/code`), else `<home>/<project>/<repo>` under this machine's
+home. **Clone here**
 clones it into that folder when the folder is missing or empty, and uses it as it is when it is a
 clone of that address already, over https or ssh alike. A folder holding anything else is refused,
 by name, and nothing in it is touched. The clone is the person's own git with their own
 credentials; on the page git asks for no password, so a repository that needs one it does not
-keep fails. A clone that fails says which repository and stops: nothing is retried another way.
+keep fails. A GitHub address is cloned in the form this machine signs in with (see "HTTPS or SSH"
+below). A clone that fails says which repository and stops: nothing is retried.
 `agentloop add --clone` clones each `--repo` path the same way before the add checks it, and on a
 terminal `agentloop add` offers the folder and asks before cloning. A repository with no address
 asks for a folder, as above.
@@ -466,6 +469,27 @@ ends with `MERGED: <how>`, or leaves them and ends with `UNMERGED: <why>`. Unres
 conflict markers left, or anything changed in the clone itself - the replay is aborted, the commit
 left local, and the loop stops. A push that fails otherwise - the remote out of reach - leaves the
 commits local, and the next session's push carries them.
+
+### HTTPS or SSH
+
+GitHub serves each repository at `https://github.com/<owner>/<repo>.git` and at
+`git@github.com:<owner>/<repo>.git`, and a definition names one of them (item git-protocol). The
+app asks which of the two this machine signs in with, afresh each time it needs to:
+
+| Form | Signs in when |
+|---|---|
+| HTTPS | git holds a credential for github.com (`git credential fill`, never asking): `GIT_TOKEN` in the container, a credential manager or `.git-credentials` elsewhere |
+| SSH | `ssh -T git@github.com` greets a user. Its first contact adds GitHub's host key to `known_hosts` |
+
+- **Cloning** (**Clone here**, `agentloop add --clone`): the address is cloned in its other form
+  when this machine signs in with that one and not with the one given.
+- **A fetch or push that fails**, pulling before a session or pushing after it: the remote's
+  address (and its `pushurl`, if it has one) is switched to the other form the same way, said in
+  the log, and the fetch or push is tried once more. A public repository fetches over HTTPS with no
+  credential and then fails to push, which this covers.
+
+An address whose own form signs in, or whose other form does not either, is kept. One with a user
+name or password in it, and any host but github.com, are never changed.
 
 Nothing in the app keeps a push from rewriting the remote's history but its never using `--force`;
 a ruleset on the branch that blocks force pushes and deletions, with no bypass, makes sure of it.

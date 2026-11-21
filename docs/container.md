@@ -1,6 +1,7 @@
 # Running AgentLoop in a container
 
-Each release is also an image, for `linux/amd64` and `linux/arm64`:
+Each release is also an image, for `linux/amd64` (not ARM: an ARM image would need building on an
+ARM runner of its own):
 
 ```sh
 docker pull ghcr.io/axelstrem/agentloop:<version>     # or :latest
@@ -46,10 +47,9 @@ that turns the variables below into a form:
    `100`. The data folder defaults to `/mnt/user/appdata/agentloop`, and Homebrew's to
    `/mnt/user/appdata/agentloop-brew`. Homebrew is many small files and symlinks: with appdata on a
    cache pool, give it `/mnt/cache/appdata/agentloop-brew`, past Unraid's slower user-share layer.
-4. For each repository a loop works on, use **Add another Path, Port, Variable...**, choose
-   **Path**, and give a container path (`/code/orchard`) and the host folder that holds the clone.
-   Name that container path in the loop's places.
-5. **Apply**, then open the **WebUI**.
+   The **Code** folder (`/mnt/user/code`, `/code` inside) holds every repository, each in a folder
+   of its name.
+4. **Apply**, then open the **WebUI**.
 
 The template is not in Community Applications; adding it by its address is all it needs.
 
@@ -60,19 +60,23 @@ The template is not in Community Applications; adding it by its address is all i
 | `AGENTLOOP_TOKEN` | the page's sign-in token. Without it, a new one is printed in the container's log at each start |
 | `PUID`, `PGID` | the user and group that serve, the loops and their sessions run as; 99 and 100 (Unraid's) when unset. Never 0: Claude Code refuses to run its sessions as root. Give the ids that own your clones |
 | `EXTRA_PACKAGES` | Debian packages a project needs beyond the image's, space-separated, installed at each start. A Brewfile is the better home for a tool |
+| `AGENTLOOP_CODE` | `/code` in the image: the one folder every repository is offered to be cloned under, as `/code/<repo>`, for every project. Root's, as a new mount is, it is given to `PUID`; nothing inside it is |
 | `AGENTLOOP_BREW` | `1` in the image: projects' tools come from their Brewfiles ([settings.md](settings.md), "Its Brewfile"). Anything else turns that off |
 | `GIT_USER_NAME`, `GIT_USER_EMAIL` | git's name and email for the loops' commits |
 | `GIT_TOKEN` | a token for HTTPS remotes, kept in `/data/home/.git-credentials`, readable by the user alone. `GIT_TOKEN_HOST` (`github.com`) and `GIT_TOKEN_USER` (`x-access-token`) say what it is for |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude's sign-in for every worker with no `signIn`; see "Signing in to Claude" below |
 
-- **Clones** are mounted wherever you like, and a loop's places name them by their paths in the
-  container (`/code/orchard`). Nothing under them is chowned. Sessions write as `PUID`, so the
-  files they make belong to you. A project's definition may also give a repository an address, and
-  **Clone here** on the page clones it into a folder you have mounted.
-- **An SSH key** for git goes in `/data/home/.ssh` (the key, and a `known_hosts` beside it), mode
-  600, owned by `PUID`.
+- **Clones** all go in the one `/code` mount. When a project's definition gives a repository an
+  address, **Add from a tracker** offers `/code/<repo>` and **Clone here** clones it there; a clone
+  already there of the same address is used as it is. A repository with no address is given its
+  folder by hand, under `/code` too. Nothing under it is chowned, and sessions write as `PUID`, so
+  the files they make belong to you. Two projects with a repository of the same name and different
+  addresses need one of the two given another folder by hand.
+- **An SSH key** for git goes in `/data/home/.ssh`, mode 600, owned by `PUID`. A GitHub address
+  is cloned, fetched and pushed in the form, HTTPS or SSH, the container signs in with: an SSH key,
+  `GIT_TOKEN`, or both ([settings.md](settings.md), "HTTPS or SSH").
 - **System packages:** the image has git, Node, `claude`, a compiler and linker
-  (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, and the libraries headless Chrome
+  (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, `unzip`, and the libraries headless Chrome
   needs.
 - **A project's tools** come from the `Brewfile` in its first repository, installed as the user
   into the Homebrew volume before each session; a session adds to it itself (see

@@ -12,8 +12,8 @@ license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
-# pytest is the only dependency, and for tests only.
-test = ["pytest>=8"]
+# pytest is the only dependency, and for tests only; xdist runs the suite on every core (-n auto).
+test = ["pytest>=8", "pytest-xdist>=3"]
 
 [project.scripts]
 agentloop = "agentloop.cli:main"

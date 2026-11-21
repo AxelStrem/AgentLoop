@@ -24,7 +24,7 @@ RUN apt-get update \
       libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
       libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
       fonts-liberation \
-      procps file \
+      procps file unzip \
  && rm -rf /var/lib/apt/lists/*
 
 # Homebrew, the one way a project's tools are installed here (item brew-tools). It lives in a volume
@@ -67,9 +67,11 @@ ENV AGENTLOOP_HOME=/data \
     DISABLE_AUTOUPDATER=1 \
     PUID=99 \
     PGID=100
-# What `brew shellenv` would set, and brew's own update at most once a day rather than before every
+# The one folder every project's repositories are cloned under (a single mount), what
+# `brew shellenv` would set, and brew's own update at most once a day rather than before every
 # install.
-ENV AGENTLOOP_BREW=1 \
+ENV AGENTLOOP_CODE=/code \
+    AGENTLOOP_BREW=1 \
     HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew \
     HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar \
     HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew \

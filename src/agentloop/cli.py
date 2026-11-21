@@ -419,7 +419,7 @@ def _add(args: argparse.Namespace) -> int:
         """A repository with an address: a folder asked for, beside the others already given or
         under the home folder, and cloned into when it is missing or empty (item clone)."""
         while True:
-            default = clones.default_folder(Path.home(), shown["project"], entry["name"], list(repos.values()))
+            default = clones.default_folder(clones.base(shown["project"]), entry["name"], list(repos.values()))
             answer = input(f"{entry['name']} (a folder to clone it into, or where it is cloned already) [{default.as_posix()}]: ").strip()
             folder = answer or default.as_posix()
             try:

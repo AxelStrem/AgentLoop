@@ -93,7 +93,9 @@ def test_status_of_the_default_account_has_no_config_dir(home, fake_claude, monk
     assert fake_claude.calls()[-1]["env"]["CLAUDE_CONFIG_DIR"] is None
 
 
-def test_status_never_makes_a_folder(home, fake_claude):
+def test_status_never_makes_a_folder(home, fake_claude, monkeypatch):
+    for name in config.SIGN_IN.values():
+        monkeypatch.delenv(name, raising=False)
     assert accounts.status(claude_exe(), "~/.claude-account9") == accounts.Login("no-folder", "folder")
     assert accounts.status(claude_exe(), None).state == "no-folder"
     assert not (home / ".claude-account9").exists()
@@ -226,6 +228,15 @@ def test_status_with_a_token_needs_no_folder_and_shows_no_secret(home, fake_clau
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-secret" and env["ANTHROPIC_API_KEY"] is None
     key = accounts.status(claude_exe(), None, sign_in={"apiKey": "MY_KEY"}, environ={"MY_KEY": "k"})
     assert (key.state, key.method) == ("in", "api_key")
+
+
+def test_status_with_a_token_the_app_was_started_with_needs_no_folder(home, fake_claude, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_ENV", "CLAUDE_CODE_OAUTH_TOKEN")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-secret")
+    login = accounts.status(claude_exe(), None)
+    assert (login.state, login.method) == ("in", "oauth_token")
+    assert not (home / ".claude").exists()
 
 
 def test_status_with_a_variable_not_set_asks_no_claude(home, fake_claude):

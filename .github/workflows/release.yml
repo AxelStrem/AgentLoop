@@ -12,12 +12,13 @@
 # started with an empty /data and a token, the page must send a visitor to its sign-in, take the
 # token and refuse a wrong one, run as the user 99 and not as root, install a Brewfile's jq as that
 # user (item brew-tools), and end at once on docker stop.
-# On a tag it is pushed to ghcr.io/<owner>/agentloop as :<version> and :latest, for linux/amd64 and
-# linux/arm64, and the release's notes say how to pull it.
+# On a tag it is pushed to ghcr.io/<owner>/agentloop as :<version> and :latest, for linux/amd64
+# alone - the image that was tried, from its cache - and the release's notes say how to pull it.
+# Another platform would be built on a runner of its own kind, not emulated.
 #
 # Run by hand, it builds and tries the same and publishes nothing: a dry run before tagging.
 #
-# The tests are not run here: tests.yml runs them on every push, the tag's commit included.
+# The tests are not run here: tests.yml runs them on the push of the branch the tag is on.
 
 name: release
 
@@ -149,8 +150,6 @@ jobs:
           name: dist
           path: dist
 
-      - uses: docker/setup-qemu-action@v3
-
       - uses: docker/setup-buildx-action@v3
 
       - name: Build the image for this runner
@@ -221,13 +220,13 @@ jobs:
           owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           echo "image=ghcr.io/$owner/agentloop" >> "$GITHUB_OUTPUT"
 
-      - name: Push the image, for amd64 and arm64
+      - name: Push the image, for amd64
         if: github.ref_type == 'tag'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ steps.names.outputs.image }}:${{ needs.build.outputs.version }}
@@ -260,7 +259,7 @@ jobs:
           {
             echo "### Docker"
             echo
-            echo "The image of this release, for linux/amd64 and linux/arm64:"
+            echo "The image of this release, for linux/amd64:"
             echo
             echo '```sh'
             echo "docker pull ghcr.io/$owner/agentloop:$VERSION"

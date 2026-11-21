@@ -25,6 +25,9 @@ replay goes on only when it said MERGED and no conflict markers are left; otherw
 the commit is left local, and the loop stops: `push` returns a `Stopped` that says which clone,
 which files and why, and the loop tells the owner what to do (item push-conflict).
 
+A fetch or push that fails on a GitHub remote in the form this machine does not sign in with,
+HTTPS or SSH, has the remote switched to the other form and is tried once more (gitauth.py).
+
 What git prints is not passed on: an error of fetch or push names the remote's URL. Its exit code
 is said instead.
 
@@ -41,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from agentloop import commits
+from agentloop import commits, gitauth
 
 # How long a fetch or a push may take before it is given up on: a remote that does not answer
 # must not hold the loop for good.
@@ -133,6 +136,20 @@ def _fetch(repo: Path, up: Upstream) -> bool:
     return _git(repo, "fetch", "-q", up.remote, timeout=NETWORK_TIMEOUT).returncode == 0
 
 
+def _fetched(repo: Path, up: Upstream, say: Say) -> bool:
+    # Tried again on a GitHub remote in the form this machine does not sign in with (item git-protocol).
+    return _fetch(repo, up) or (gitauth.switch(repo, up.remote, say) and _fetch(repo, up))
+
+
+def _push(repo: Path, up: Upstream) -> subprocess.CompletedProcess:
+    return _git(repo, "push", "-q", "--porcelain", up.remote, f"HEAD:refs/heads/{up.branch}", timeout=NETWORK_TIMEOUT)
+
+
+def _refused(done: subprocess.CompletedProcess) -> bool:
+    # --porcelain marks a refused ref with `!`, and says why: another loop pushed first.
+    return b"[rejected]" in done.stdout or b"non-fast-forward" in done.stdout or b"fetch first" in done.stdout
+
+
 def _counts(repo: Path) -> tuple[int, int]:
     """How many commits the clone has that its upstream has not, and the other way round."""
     found = _out(_git(repo, "rev-list", "--left-right", "--count", "HEAD...@{u}")).split()
@@ -152,7 +169,7 @@ def pull(repos: list[Path], say: Say, *, lock: Path | None = None) -> None:
         up = upstream(repo)
         if up is None:
             continue
-        if not _fetch(repo, up):
+        if not _fetched(repo, up, say):
             say(f"  {repo.name}: could not fetch from {up.remote}; the session starts from what the clone has.", "DarkYellow")
             continue
         ahead, behind = _counts(repo)
@@ -190,7 +207,7 @@ def push(repos: list[Path], worktrees: Path, resolve: Resolve, say: Say, *, trie
 
 def _push_one(repo: Path, up: Upstream, worktree: Path, resolve: Resolve, say: Say, tries: int, lock: Path | None) -> Stopped | None:
     for _ in range(tries):
-        if not _fetch(repo, up):
+        if not _fetched(repo, up, say):
             say(f"  {repo.name}: could not fetch from {up.remote}; not pushed - the commits are left local, for a later session's push.", "DarkYellow")
             return None
         ahead, behind = _counts(repo)
@@ -206,12 +223,14 @@ def _push_one(repo: Path, up: Upstream, worktree: Path, resolve: Resolve, say: S
                 say(f"  {repo.name}: not pushed - changes here are in files {up} has changed since. The commits are left local.", "DarkYellow")
                 return None
             say(f"  replayed onto {up} in {repo.name}: {_out(_git(repo, 'log', '-1', '--format=%h %s'))}", "DarkGreen")
-        done = _git(repo, "push", "-q", "--porcelain", up.remote, f"HEAD:refs/heads/{up.branch}", timeout=NETWORK_TIMEOUT)
+        done = _push(repo, up)
+        if done.returncode != 0 and not _refused(done) and gitauth.switch(repo, up.remote, say):
+            # Fetched anonymously, but pushed in the form this machine does not sign in with.
+            done = _push(repo, up)
         if done.returncode == 0:
             say(f"  pushed in {repo.name}: {_plural(ahead, 'commit')} to {up}", "DarkGreen")
             return None
-        # --porcelain marks a refused ref with `!`, and says why: another loop pushed first.
-        if b"[rejected]" in done.stdout or b"non-fast-forward" in done.stdout or b"fetch first" in done.stdout:
+        if _refused(done):
             say(f"  {repo.name}: {up} moved on before the push; fetched again.", "DarkGray")
             continue
         say(f"  {repo.name}: the push failed (git exit {done.returncode}); the commits are left local, for a later session's push.", "DarkYellow")

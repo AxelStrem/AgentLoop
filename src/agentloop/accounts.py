@@ -166,12 +166,15 @@ def status(claude_exe: str, claude: str | None, timeout: float = STATUS_TIMEOUT,
     macos = sys.platform == "darwin" if macos is None else macos
     folder = session.config_dir(claude)
     variables: dict[str, str | None] = {"CLAUDE_CONFIG_DIR": str(folder) if claude else None}
+    # A token or key the app was started with reaches every worker with no signIn, as a container's
+    # CLAUDE_CODE_OAUTH_TOKEN does: claude is asked with it, folder or none.
+    inherited = any((os.environ if environ is None else environ).get(name) for name in config.SIGN_IN.values())
     if sign_in:
         try:
             variables.update(session.sign_in_variables(sign_in, environ))
         except session.SessionError:
             return Login("out", "variable", detail=f"{next(iter(sign_in.values()))} is not set")
-    elif not folder.is_dir():
+    elif not folder.is_dir() and not inherited:
         return Login("no-folder", "folder")
     try:
         stdout = _run_ended(

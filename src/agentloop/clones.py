@@ -6,10 +6,12 @@ folder asked for, instead of asking where a clone already is. That folder is one
 missing or empty, and then it is cloned into; already a clone of that address, and then it is used
 as it is; or anything else, which is refused by name and never touched.
 
-The clone is the person's own git with their own credentials. One that fails - no access to a
-private repository, say - says which repository and stops; nothing is retried another way. The
-default folder offered is beside the others the person picked, or `<home>/<project>/<repo>` under
-this machine's home: never a path from anyone else's machine.
+The clone is the person's own git with their own credentials. A GitHub address is cloned in the
+form, HTTPS or SSH, this machine signs in with (item git-protocol, gitauth.py). One that fails - no
+access to a private repository, say - says which repository and stops; nothing is retried. The
+default folder offered is beside the others the person picked, else `<AGENTLOOP_CODE>/<repo>` on a
+machine that names one folder for every clone, else `<home>/<project>/<repo>` under this
+machine's home: never a path from anyone else's machine.
 """
 
 from __future__ import annotations
@@ -20,10 +22,13 @@ import subprocess
 import urllib.parse
 from pathlib import Path
 
-from agentloop import config
+from agentloop import config, gitauth
 
 # Long enough for a large repository on a slow line; a clone that takes longer is said to have.
 TIMEOUT = 600.0
+
+# The machine's one folder of clones, when it has one (the container image sets /code).
+CODE = "AGENTLOOP_CODE"
 
 EMPTY = "empty"
 CLONE = "clone"
@@ -120,6 +125,7 @@ def clone(name: str, folder: Path, url: str, branch: str = "", *, interactive: b
     if state(name, folder, url) == CLONE:
         return False
     folder.parent.mkdir(parents=True, exist_ok=True)
+    url = gitauth.usable(url)
     args = ["clone", *(["--branch", branch] if branch else []), "--", url, str(folder)]
     done = _git(*args, interactive=interactive, timeout=timeout)
     if done.returncode != 0:
@@ -130,10 +136,19 @@ def clone(name: str, folder: Path, url: str, branch: str = "", *, interactive: b
     return True
 
 
-def default_folder(home: Path, project: str, name: str, picked: list[str] | None = None) -> Path:
+def base(project: str, environ: dict[str, str] | None = None) -> Path:
+    """The folder a project's repositories are offered to be cloned under: the one AGENTLOOP_CODE
+    names, shared by every project (the container's single mount of clones), else
+    `<home>/<project>`."""
+    environ = os.environ if environ is None else environ
+    code = (environ.get(CODE) or "").strip()
+    return config.expand(code) if code else Path.home() / project
+
+
+def default_folder(under: Path, name: str, picked: list[str] | None = None) -> Path:
     """Where `name` is offered to go: beside the first folder the person picked for another of the
-    project's repositories, else `<home>/<project>/<name>`."""
+    project's repositories, else `<under>/<name>`, `under` being `base(project)`."""
     for other in picked or []:
         if other and other.strip():
             return config.expand(other.strip()).parent / name
-    return home / project / name
+    return under / name

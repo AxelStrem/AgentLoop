@@ -99,7 +99,7 @@ token is the only thing that keeps others out. So:
 
 ## Running in a container
 
-Each release is also an image, `ghcr.io/axelstrem/agentloop`, for `linux/amd64` and `linux/arm64`.
+Each release is also an image, `ghcr.io/axelstrem/agentloop`, for `linux/amd64`.
 [container.md](container.md) covers running it with `docker run`, compose or Unraid, the volumes and
 variables, signing in to Claude without a desktop, and what a redeploy does.
 

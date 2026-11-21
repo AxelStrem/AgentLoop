@@ -15,8 +15,8 @@ services:
       - /mnt/user/appdata/agentloop:/data
       # Homebrew and every project's tools, shared by all projects; its own volume, at this path.
       - /mnt/cache/appdata/agentloop-brew:/home/linuxbrew/.linuxbrew
-      # One line per repository a loop works on; name the container path in the loop's places.
-      - /mnt/user/code/orchard:/code/orchard
+      # Every repository, each in /code/<repo>: Clone here on the page offers that folder.
+      - /mnt/user/code:/code
     environment:
       PUID: "99"
       PGID: "100"
