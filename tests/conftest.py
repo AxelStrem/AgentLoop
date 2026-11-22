@@ -16,6 +16,13 @@ import pytest
 
 FAKE_CLAUDE = Path(__file__).resolve().parent / "fake_claude" / "fake_claude.py"
 
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Tests marked `slow` go first. pytest-xdist hands tests to its workers in this order, so a
+    slow one starts at once and runs beside the rest, instead of starting late and keeping the
+    whole run waiting for it."""
+    items.sort(key=lambda test: test.get_closest_marker("slow") is None)
+
 class FakeClaude:
     """The fake `claude` on PATH, and the record of what it was called with."""
 

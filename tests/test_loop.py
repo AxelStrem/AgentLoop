@@ -528,14 +528,16 @@ def test_an_item_asked_about_is_not_a_repeat(project, fake_claude):
     assert not p.r.seen
 
 
+@pytest.mark.slow
 def test_a_run_has_no_limit_on_its_items(project, fake_claude):
-    # Item no-limits: it works until nothing is left, however many items that is.
-    handles = [f"i{n:02}" for n in range(22)]
+    # Item no-limits: it works until nothing is left, however many items that is. 21 is one past
+    # the limit there was, maxIterations' default of 20; each item costs seconds, so no more.
+    handles = [f"i{n:02}" for n in range(21)]
     p = project(*[item(h, "ready", complexity="low") for h in handles])
     p.play(*[p.scene(move(h, "testing"), result=f"COMMIT: {h}: built") for h in handles])
     assert p.go() == 0
-    assert len(fake_claude.calls()) == 22
-    assert " Iteration 22..." in p.lines
+    assert len(fake_claude.calls()) == 21
+    assert " Iteration 21..." in p.lines
     assert "[QUEUE_EMPTY] - All actionable agent tasks have been fully cleared." in p.lines
 
 

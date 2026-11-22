@@ -31,3 +31,6 @@ agentloop = ["tools/*.md", "page/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `slow` tests are started first (tests/conftest.py), so that under -n auto each runs beside the
+# rest of the suite rather than after it.
+markers = ["slow: a test of a minute or more, moved to the front of the run"]
