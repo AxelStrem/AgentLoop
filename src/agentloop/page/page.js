@@ -1,5 +1,5 @@
-// The page: this machine's loops, started, stopped and killed; their settings, the bundles' and
-// the machine's; the workers; and each loop's output as it comes, in the script's colours.
+// The page: this machine's loops, started, stopped and killed; their settings and the
+// machine's; the workers; and each loop's output as it comes, in the script's colours.
 //
 // Plain JavaScript, no framework and no build step. Every text from the server goes in through
 // textContent, never as markup. Every write sends the version of the file it read, and a write
@@ -14,7 +14,6 @@ const SETTINGS = {
   buildAfterTriage: "The complexities a triage that leaves its item ready goes straight on to build, in the same session.",
   buildInTriageUpTo: "A triage goes on to build an item of this many points or fewer, whatever its complexity.",
   trial: "Until a date, builds of one complexity up to some points go on another route, to try it.",
-  stopAtWeeklyUse: "Stop between items once this share of the week's allowance is used; 1 never stops early.",
   askEveryMinutes: "While a usage limit is waited out, how often to ask whether it has lifted sooner.",
   chainUpTo: "How many items one session may work, going on to the one it asks for.",
   repeatUpTo: "Stop once sessions on one model have left an item at the same stage this many times.",
@@ -44,7 +43,6 @@ const PANE_MIN_WIDTH = 420;
 const state = {
   loops: [], loopsVersion: null,
   settings: null, settingsVersion: null, appDefaults: null,
-  bundles: [], bundleRaw: {},
   accounts: null, accountsAsked: null,
   panes: new Map(), active: null,
 };
@@ -150,12 +148,11 @@ function valueText(key, value) {
 
 function showView() {
   const view = (location.hash || "#loops").slice(1);
-  for (const name of ["loops", "machine", "bundles"]) {
+  for (const name of ["loops", "machine"]) {
     $(`view-${name}`).hidden = name !== view;
   }
   for (const a of document.querySelectorAll(".top nav a")) a.classList.toggle("active", a.dataset.view === view);
   if (view === "machine") renderMachine();
-  if (view === "bundles") renderBundles();
 }
 
 // Reading what the server holds
@@ -185,14 +182,6 @@ async function loadSettings() {
   state.appDefaults = data.appDefaults;
 }
 
-async function loadBundles() {
-  const data = await api("GET", "/api/bundles");
-  state.bundles = data.bundles;
-  const raws = await Promise.all(state.bundles.map((b) => api("GET", `/api/bundles/${encodeURIComponent(b.name)}`).catch(() => null)));
-  state.bundleRaw = {};
-  state.bundles.forEach((b, i) => { if (raws[i]) state.bundleRaw[b.name] = raws[i]; });
-}
-
 // claude answers for each account in a second or two, so the page asks once and keeps the answer
 // until it is asked again.
 function loadAccounts(again) {
@@ -214,6 +203,20 @@ function workerOf(name) {
 
 // The loops
 
+// Items held, by a mention, for accounts no running loop here signs in as (item assign-bot): each
+// loop says the account it is and what it saw held for others - by username, compared here, and
+// by display name, shown - and the page can only know this machine's loops: a loop elsewhere may
+// well run the bot.
+function unrunBots(loop) {
+  const others = loop.status.others || [];
+  if (!others.length) return [];
+  const tracker = trackerText(loop.tracker);
+  const running = new Set(state.loops
+    .filter((l) => l.status.alive && l.status.account && trackerText(l.tracker) === tracker)
+    .map((l) => l.status.account));
+  return others.filter((o) => !(o.bots || []).some((b) => running.has(b)));
+}
+
 function renderLoops() {
   const body = $("loops");
   body.replaceChildren();
@@ -223,8 +226,21 @@ function renderLoops() {
     const item = s.item ? h("span", { title: s.title || "" }, `${s.kind || ""} ${s.item}`.trim(), s.title ? h("span", { class: "sub", text: s.title }) : null) : "";
     const stateCell = [h("span", { class: "state" }, h("span", { class: `dot ${s.state}` }), s.state)];
     if (s.until) stateCell.push(h("span", { class: "sub", text: s.state === "idle" ? `${s.watching ? "on any change, else " : ""}next look ${s.until}` : `until ${s.until}` }));
+    // Paused at its worker's own limit (item h87x): why, and the approval that lets it go on.
+    if (s.state === "paused" && s.over) {
+      stateCell.push(h("span", { class: "sub", text: overText(s.over) }),
+        h("button", { type: "button", class: "small", "aria-label": `Go on past the limit, ${loop.name}`,
+          title: `Lets every loop on ${loop.worker} go on past its ${s.over.name} limit until the window resets`,
+          onclick: () => approveLimit(loop.worker, s.over.window) }, "Go on past the limit"));
+    }
     if (s.state === "failed" && s.error) stateCell.push(h("span", { class: "problem", text: s.error }));
     if (s.busy) stateCell.push(h("span", { class: "sub", text: s.busy }));
+    const unrun = unrunBots(loop);
+    if (unrun.length) {
+      stateCell.push(h("span", { class: "chip warn",
+        title: `Mentioning accounts no running loop on this machine signs in as - a loop on another machine may run them:\n${unrun.map((o) => `${o.handle} (${(o.names || o.bots).join(", ")})`).join("\n")}`,
+        text: `${unrun.length === 1 ? "1 item" : unrun.length + " items"} for bots not run here` }));
+    }
     // The project's setup script (item project-setup): a failed run with the end of its output,
     // and one still to run said, for no session runs until it has succeeded.
     const setupState = (loop.setup || {}).state;
@@ -243,10 +259,7 @@ function renderLoops() {
     const canStart = !s.alive && !s.busy;
     const row = h("tr", {},
       h("td", { "data-label": "loop" }, h("strong", { text: loop.name }), loop.like ? h("span", { class: "sub", text: `copy of ${loop.like}` }) : null),
-      // A loop on a local bundle is marked: projects are read from their trackers now, and a
-      // bundle is for trying a brief out (item doc-read).
       h("td", { "data-label": "project" }, loop.project,
-        loop.source === "bundle" ? h("span", { class: "chip", title: "Runs on a bundle folder on this PC, not on the definition beside its tracker", text: "local bundle" }) : null,
         // A loop that reaches its tracker on a server of its own, not its worker's (item loop-from-url).
         loop.server ? h("span", { class: "chip", title: "Its tracker is on this server, reached with the loop's own key file, not its worker's", text: loop.server }) : null,
         // A changed definition: waiting to be accepted, or used at once and not yet dismissed
@@ -353,6 +366,35 @@ function showDefinitionChange(name) {
     } }, change.pending ? "Accept" : "Dismiss"),
   ));
   dialog.showModal();
+}
+
+// A worker's own usage limits (item h87x): the windows a form offers, and how one past its limit is said.
+const LIMIT_WINDOWS = [["five_hour", "5-hour"], ["seven_day", "weekly"]];
+
+function overText(over) {
+  if (over.window === "overage") return "using extra usage, which its worker allows none of";
+  return `${over.name} ${Math.round(over.used * 100)}% used, its worker's limit ${Math.round(over.limit * 100)}%`;
+}
+
+function limitsText(limits) {
+  const parts = [];
+  for (const [key, value] of Object.entries(limits || {})) {
+    if (value === null || value === undefined) continue;
+    if (key === "overage") parts.push("no extra usage");
+    else parts.push(`${(LIMIT_WINDOWS.find(([k]) => k === key) || [key, key.replace(/_/g, " ")])[1]} ${Math.round(value * 100)}%`);
+  }
+  return parts.join(", ");
+}
+
+async function approveLimit(worker, window) {
+  try {
+    await api("POST", `/api/workers/${encodeURIComponent(worker)}/approve-limit`, window ? { window } : {});
+    say(`${worker}'s loops go on past the limit until the window resets.`);
+    await loadLoops();
+    if (!$("view-machine").hidden) await readUsage();
+  } catch (error) {
+    failed(error);
+  }
 }
 
 function loopOf(name) {
@@ -473,7 +515,7 @@ async function killLoop(name) {
 }
 
 async function deleteLoop(name) {
-  if (!confirm(`Delete the loop ${name} from this machine's settings? Its project's bundle and repositories are left as they are.`)) return;
+  if (!confirm(`Delete the loop ${name} from this machine's settings? Its repositories are left as they are.`)) return;
   try {
     await api("DELETE", `/api/loops/${encodeURIComponent(name)}`, { version: state.loopsVersion });
     closePane(name);
@@ -892,16 +934,14 @@ function markInputs(root, field) {
 // keeps only what is set here.
 async function editLoop(name, problems, copyOf) {
   try {
-    await Promise.all([loadSettings(), loadBundles(), loadAccounts(false).catch(() => null)]);
+    await Promise.all([loadSettings(), loadAccounts(false).catch(() => null)]);
   } catch (error) {
     failed(error);
     return;
   }
   const loops = state.settings.loops || [];
-  const raw = name ? copy(loops.find((l) => l.name === name)) : copyOf ? { name: "", like: copyOf, repos: {} } : {
-    name: "", project: state.bundles[0] ? state.bundles[0].name : "", worker: (state.settings.workers || [])[0]?.name || "",
-    repos: {}, places: {}, settings: {},
-  };
+  // A new loop is added from its tracker (addFromTracker); this form edits one, or makes a copy.
+  const raw = name ? copy(loops.find((l) => l.name === name)) : { name: "", like: copyOf, repos: {} };
   if (!raw) {
     say(`No loop named ${name}.`, true);
     return;
@@ -917,47 +957,40 @@ async function editLoop(name, problems, copyOf) {
   const root = h("div");
   let settingsPart = null;
   const nameInput = h("input", { value: raw.name, required: true, pattern: "[a-z0-9_-]+" });
-  // A loop on a tracker keeps it: the form changes where its repositories are, not what it works.
-  const shown = raw.tracker ? (state.loops || []).find((l) => l.name === name) : null;
-  const project = raw.tracker
-    ? h("select", { disabled: true }, h("option", { value: "" }, raw.tracker))
-    : h("select", {}, state.bundles.map((b) => h("option", { value: b.name, selected: b.name === raw.project }, b.name)));
+  // A loop keeps its tracker: the form changes where its repositories are, not what it works.
+  const shown = (state.loops || []).find((l) => l.name === name);
+  const project = h("select", { disabled: true }, h("option", { value: "" }, raw.tracker));
   const worker = h("select");
   const placesBox = h("div");
   const settingsBox = h("div");
 
   const draw = () => {
-    const bundle = raw.tracker ? (shown && shown.definition) : state.bundles.find((b) => b.name === project.value);
+    const named = shown && shown.definition;
     worker.replaceChildren(...(state.settings.workers || []).map((w) => h("option", {
-      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer,
-    }, w.name + (!w.overseer ? " (no server)" : ""))));
+      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer && !raw.overseer,
+    }, w.name + (!w.overseer && !raw.overseer ? " (no server)" : ""))));
     placesBox.replaceChildren();
-    if (bundle) {
+    if (named) {
       placesBox.append(h("h3", { text: "Where each repository is on this machine" }));
-      for (const repo of bundle.repos) {
+      for (const repo of named.repos) {
         const input = h("input", { "data-repo": repo, value: raw.repos[repo] || "", placeholder: "a folder inside a git repository" });
-        placesBox.append(field(repo, bundle.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
+        placesBox.append(field(repo, named.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
       }
-      for (const place of bundle.places || []) {
+      for (const place of named.places || []) {
         const input = h("input", { "data-place": place, value: (raw.places || {})[place] || "", placeholder: "a folder; never committed" });
         placesBox.append(field(place, "A folder the brief names that is not a repository.", input, `places.${place}`));
       }
     }
-    const bundleSettings = raw.tracker ? null : ((state.bundleRaw[project.value] || {}).bundle || {}).settings;
-    const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults], ["the bundle", bundleSettings]]);
+    const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults]]);
     settingsPart = settingsEditor(raw.settings || {}, beneath);
-    if (raw.tracker && !bundle) placesBox.append(h("p", { class: "sub", text: "Its repositories are named by the definition beside its tracker, read when the loop first starts." }));
+    if (!named) placesBox.append(h("p", { class: "sub", text: "Its repositories are named by the definition beside its tracker, read when the loop first starts." }));
     settingsBox.replaceChildren(h("h3", { text: "Run settings" }), settingsPart.el);
   };
-  project.addEventListener("change", () => {
-    raw.project = project.value;
-    draw();
-  });
   worker.addEventListener("change", () => { raw.worker = worker.value; });
   draw();
   root.append(
     field("name", "The page's name for the loop, unique on this machine: lower case, digits, - and _.", nameInput, "name"),
-    field(raw.tracker ? "tracker" : "project", raw.tracker ? "The tracker it reads its project from." : "The bundle it works.", project, raw.tracker ? "tracker" : "project"),
+    field("tracker", "The tracker it reads its project from.", project, "tracker"),
     field("worker", "The Claude account it runs on, and the server and key it reaches the tracker with.", worker, "worker"),
     placesBox, settingsBox);
 
@@ -973,7 +1006,6 @@ async function editLoop(name, problems, copyOf) {
       ...raw, name: nameInput.value.trim(), worker: worker.value,
       repos: {}, places: {}, settings: settingsPart.collect(),
     };
-    if (!raw.tracker) loop.project = project.value;
     for (const input of root.querySelectorAll("[data-repo]")) if (input.value.trim()) loop.repos[input.dataset.repo] = input.value.trim();
     for (const input of root.querySelectorAll("[data-place]")) if (input.value.trim()) loop.places[input.dataset.place] = input.value.trim();
     if (!Object.keys(loop.places).length) delete loop.places;
@@ -1201,6 +1233,12 @@ async function addFromTracker() {
   openEditor("A loop from a tracker", body, save, []);
 }
 
+// The server a loop names itself, a copy taking its original's (config.overseer_for): with one, its
+// worker needs none.
+function ownServer(loop, base) {
+  return "overseer" in loop ? loop.overseer : (base && base.overseer) || null;
+}
+
 // A copy of a loop: its name and its repositories' folders asked for, everything else the
 // original's unless set here.
 function editCopy(name, raw, base, problems) {
@@ -1208,14 +1246,15 @@ function editCopy(name, raw, base, problems) {
     say(`No loop named ${raw.like}, which ${name || "the copy"} is a copy of.`, true);
     return;
   }
-  const bundle = state.bundles.find((b) => b.name === base.project);
+  // What the original places, as its definition last read names them.
+  const named = ((state.loops || []).find((l) => l.name === base.name) || {}).definition;
   const root = h("div");
   const nameInput = h("input", { value: raw.name, required: true, pattern: "[a-z0-9_-]+" });
   const worker = h("select", {},
     h("option", { value: "", selected: raw.worker === undefined }, `as ${base.name}: ${base.worker}`),
     (state.settings.workers || []).map((w) => h("option", {
-      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer,
-    }, w.name + (!w.overseer ? " (no server)" : ""))));
+      value: w.name, selected: w.name === raw.worker, disabled: !w.overseer && !ownServer(raw, base),
+    }, w.name + (!w.overseer && !ownServer(raw, base) ? " (no server)" : ""))));
   const greyed = () => worker.classList.toggle("copied", worker.value === "");
   worker.addEventListener("change", greyed);
   greyed();
@@ -1223,26 +1262,26 @@ function editCopy(name, raw, base, problems) {
   const folder = (kind, key, own, theirs, what) =>
     h("input", { [`data-${kind}`]: key, value: own || "", placeholder: theirs ? `as ${base.name}: ${theirs}` : what });
   const placesBox = h("div");
-  if (bundle) {
+  if (named) {
+    const project = base.tracker.replace(/^.*\//, "").replace(/\.os$/, "");
     placesBox.append(h("h3", { text: "Where each repository is on this machine" }),
-      h("p", { class: "sub", text: `Each its own clone: two loops of ${base.project} may not commit in one repository.` }));
-    for (const repo of bundle.repos) {
+      h("p", { class: "sub", text: `Each its own clone: two loops of ${project} may not commit in one repository.` }));
+    for (const repo of named.repos) {
       const input = folder("repo", repo, (raw.repos || {})[repo], (base.repos || {})[repo], "a folder inside a git repository");
-      placesBox.append(field(repo, bundle.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
+      placesBox.append(field(repo, named.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
     }
-    for (const place of bundle.places || []) {
+    for (const place of named.places || []) {
       const input = folder("place", place, (raw.places || {})[place], (base.places || {})[place], "a folder; never committed");
       placesBox.append(field(place, "A folder the brief names that is not a repository; left empty, the original's.", input, `places.${place}`));
     }
   }
-  const bundleSettings = ((state.bundleRaw[base.project] || {}).bundle || {}).settings;
-  const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults], ["the bundle", bundleSettings],
+  const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults],
     [`the loop ${base.name}`, base.settings]]);
   const settingsPart = settingsEditor(raw.settings || {}, beneath);
   root.append(
     field("name", "The page's name for the loop, unique on this machine: lower case, digits, - and _.", nameInput, "name"),
     field("copy of", `What is not set here is ${base.name}'s, and follows it when it changes.`, h("strong", { text: base.name }), "like"),
-    field("project", "The original's.", h("select", { disabled: true }, h("option", {}, base.project)), "project"),
+    field("tracker", "The original's.", h("select", { disabled: true }, h("option", {}, base.tracker)), "tracker"),
     field("worker", "The Claude account it runs on: another one than the original's, to run on its usage.", worker, "worker"),
     placesBox, h("h3", { text: "Run settings" }), settingsPart.el);
   const body = {
@@ -1272,7 +1311,6 @@ function editCopy(name, raw, base, problems) {
   openEditor(name ? `The loop ${name}` : `A copy of ${base.name}`, body, save, problems);
 }
 
-$("add-loop").addEventListener("click", () => editLoop(null));
 $("add-from-tracker").addEventListener("click", () => addFromTracker());
 
 // This machine: its workers and its settings.
@@ -1311,6 +1349,10 @@ async function readUsage() {
     for (const el of document.querySelectorAll("#workers .usage")) {
       if (el.dataset.worker === name) el.textContent = usageText(usage);
     }
+    const worker = (state.settings.workers || []).find((w) => w.name === name);
+    for (const el of document.querySelectorAll("#workers .limits")) {
+      if (el.dataset.worker === name && worker) el.replaceWith(limitCard(worker, usage) || h("span"));
+    }
   }
 }
 
@@ -1320,9 +1362,12 @@ function drawWorkers() {
   const found = $("found");
   found.replaceChildren();
   const accounts = state.accounts;
+  const loops = state.settings.loops || [];
+  const original = (l) => (l.like ? loops.find((o) => o.name === l.like) : null);
   for (const worker of state.settings.workers || []) {
     const said = accounts ? accounts.workers.find((w) => w.name === worker.name) : null;
     const overseer = worker.overseer || {};
+    const stranded = loops.filter((l) => (l.worker || (original(l) || {}).worker) === worker.name && !ownServer(l, original(l))).map((l) => l.name);
     const login = said ? said.login.line : "asking claude...";
     box.append(h("div", { class: "card" },
       h("div", { class: "head" },
@@ -1335,9 +1380,12 @@ function drawWorkers() {
       h("div", {}, h("span", { class: said && said.login.state === "in" ? "" : "problem", text: login })),
       said && said.login.state !== "in" && said.loginCommand ? h("pre", { class: "mono", text: said.loginCommand }) : null,
       h("div", { class: "usage c-darkcyan mono", "data-worker": worker.name, text: usageText(said && said.usage) }),
+      limitCard(worker, said && said.usage),
       worker.manager ? h("div", { class: "sub" }, "manager ", h("span", { class: "mono", text: worker.manager }), ": its loops take their items first") : null,
       worker.overseer ? h("div", { class: "sub" }, "server ", h("span", { class: "mono", text: overseer.server || "" }),
-        ", key file ", h("span", { class: "mono", text: overseer.keyFile || "" })) : h("div", { class: "problem", text: "no server: it cannot run a loop, as every tracker is on one" })));
+        ", key file ", h("span", { class: "mono", text: overseer.keyFile || "" }))
+        : stranded.length ? h("div", { class: "problem", text: `no server: ${stranded.join(", ")} ${stranded.length === 1 ? "reaches its tracker" : "reach their trackers"} through this worker, and cannot run` })
+        : h("div", { class: "sub", text: "no server of its own: each of its loops names one, as a loop added from a tracker's whole address does" })));
   }
   if (accounts && accounts.found.length) {
     found.append(h("p", { class: "note", text: "Claude folders on this machine that no worker names yet:" }));
@@ -1347,6 +1395,22 @@ function drawWorkers() {
         h("button", { type: "button", class: "small", onclick: () => addWorker(f.claude, f.name) }, `Add as ${f.name}`))));
     }
   }
+}
+
+// A worker's own limits on its card: what they are, the one it is past, and the button that lets its
+// loops go on past it.
+function limitCard(worker, usage) {
+  const said = limitsText(worker.limits);
+  if (!said) return null;
+  const box = h("div", { class: "sub limits", "data-worker": worker.name }, `pauses its loops at ${said}`);
+  if (usage && usage.over) {
+    box.append(h("div", {}, h("span", { class: "problem", text: `past it: ${overText(usage.over)}` }), " ",
+      h("button", { type: "button", class: "small", onclick: () => approveLimit(worker.name, usage.over.window) }, "Go on past the limit")));
+  }
+  for (const [key, until] of Object.entries((usage && usage.approved) || {})) {
+    box.append(h("div", { text: `going on past its ${key === "overage" ? "extra usage" : (LIMIT_WINDOWS.find(([k]) => k === key) || [key, key])[1]} limit, approved, until ${new Date(until * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` }));
+  }
+  return box;
 }
 
 async function addWorker(claude, name) {
@@ -1442,6 +1506,19 @@ function editWorker(name) {
   signIn.value = signKind;
   const signVariable = h("input", { class: "mono", value: signKind ? worker.signIn[signKind] : "",
     placeholder: "CLAUDE_CODE_OAUTH_TOKEN" });
+  // Its own usage limits (item h87x), as %: the 5-hour and weekly windows, any other its limits or
+  // its last report name, and the extra usage, which reports say is used or not, never how much.
+  const limits = worker.limits || {};
+  const said = workerOf(name);
+  const reported = Object.keys(((said && said.usage && said.usage.rate) || {}).unifiedWindows || {});
+  const windows = [...LIMIT_WINDOWS];
+  for (const key of [...reported, ...Object.keys(limits)]) {
+    if (key !== "overage" && !windows.some(([k]) => k === key)) windows.push([key, key.replace(/_/g, " ")]);
+  }
+  const limitInputs = windows.map(([key, label]) => [key, label, h("input", {
+    type: "number", class: "short", min: "0", max: "100", step: "1", placeholder: "none",
+    value: limits[key] != null ? String(Math.round(limits[key] * 100)) : "" })]);
+  const noOverage = h("input", { type: "checkbox", checked: limits.overage === 0 });
   root.append(
     field("Claude folder", "The account's config folder, CLAUDE_CONFIG_DIR; empty for the default account.", claude, "claude"),
     field("a server", "The Overseer server the trackers are on, and the key its loops sign with.", h("label", { class: "group" }, hasServer, "this worker has one"), "overseer"),
@@ -1451,7 +1528,12 @@ function editWorker(name) {
       pasteKey(keyFile, () => ({ server: server.value.trim() })), "key"),
     field("manager", "The Overseer username whose items this worker's loops take first; empty for none.", manager, "manager"),
     field("signs in with", "How its sessions sign in to Claude. A token or key is read from an environment variable where agentloop runs, as in a container.", signIn, "signIn"),
-    field("variable", "The name of the environment variable holding the token or key: never the secret itself.", signVariable, "signIn"));
+    field("variable", "The name of the environment variable holding the token or key: never the secret itself.", signVariable, "signIn"),
+    ...limitInputs.map(([key, label, input]) => field(`${label} limit`,
+      `Its loops pause before a session once this % of the ${label} allowance is used, until it resets or you approve going on past it; empty for none.`,
+      h("span", { class: "group" }, input, "%"), "limits")),
+    field("extra usage", "Pause its loops while a session reports using extra usage, past its plan's allowance, until the window that ran out resets or you approve going on.",
+      h("label", { class: "group" }, noOverage, "allow none"), "limits"));
   const body = { el: root, mark: (f) => markInputs(root, f) };
   openEditor(`The worker ${name}`, body, async () => {
     await saveSettings((raw) => {
@@ -1461,6 +1543,13 @@ function editWorker(name) {
       w.manager = manager.value.trim() || null;
       if (signIn.value) w.signIn = { [signIn.value]: signVariable.value.trim() };
       else delete w.signIn;
+      const set = {};
+      for (const [key, , input] of limitInputs) {
+        if (input.value.trim() !== "") set[key] = Number(input.value) / 100;
+      }
+      if (noOverage.checked) set.overage = 0;
+      if (Object.keys(set).length) w.limits = set;
+      else delete w.limits;
     });
     await loadAccounts(true);
     drawWorkers();
@@ -1478,17 +1567,14 @@ function drawMachineSettings() {
   const port = h("input", { type: "number", class: "short", min: "0", max: "65535", value: (raw.server || {}).port ?? "", placeholder: "8765" });
   const install = h("input", { value: raw.install || "", placeholder: "not built yet" });
   const claude = h("input", { value: raw.claude || "", placeholder: "found on PATH" });
-  const bundles = h("textarea", { rows: String(Math.max(2, (raw.bundles || []).length)), class: "mono", style: "flex: 1 1 30rem; max-width: 40rem" });
-  bundles.value = (raw.bundles || []).join("\n");
   const defaults = settingsEditor(raw.defaults || {}, beneathOf([["the app", state.appDefaults]]));
   const problem = h("p", { class: "problems", hidden: true });
   form.append(
     field("page's port", "The port agentloop serve listens on, on 127.0.0.1; used from the next start of the server.", port, "server.port"),
     field("build installed at", "Where agentloop build puts the copy of the app that runs.", install, "install"),
     field("claude", "The claude to run, where it is not on PATH.", claude, "claude"),
-    field("bundle folders", "The folders of the bundles this machine knows, one a line.", bundles, "bundles"),
     h("h3", { text: "Run settings for every loop here" }),
-    h("p", { class: "note", text: "Beneath each bundle's and each loop's own." }),
+    h("p", { class: "note", text: "Beneath each project's and each loop's own." }),
     defaults.el, problem,
     h("div", { class: "buttons" }, h("button", { type: "submit", class: "primary" }, "Save")));
   form.onsubmit = async (event) => {
@@ -1503,7 +1589,8 @@ function drawMachineSettings() {
         r.claude = claude.value.trim() || null;
         // An Overseer library named here once means nothing now: the server hands out the template.
         delete r.overseer;
-        r.bundles = bundles.value.split("\n").map((x) => x.trim()).filter(Boolean);
+        // The empty list of bundle folders settings held before bundles went (item drop-bundle-source).
+        delete r.bundles;
         r.defaults = defaults.collect();
       });
       say("This machine's settings saved.");
@@ -1517,78 +1604,6 @@ function drawMachineSettings() {
       }
     }
   };
-}
-
-// The bundles
-
-async function renderBundles() {
-  try {
-    await Promise.all([loadSettings(), loadBundles()]);
-  } catch (error) {
-    failed(error);
-    return;
-  }
-  const box = $("bundles");
-  box.replaceChildren();
-  if (!state.bundles.length) box.append(h("p", { class: "note", text: "No bundles yet: add a bundle's folder in this machine's settings." }));
-  for (const bundle of state.bundles) {
-    box.append(h("div", { class: "card" },
-      h("div", { class: "head" }, h("strong", { text: bundle.name }),
-        h("button", { type: "button", class: "small", onclick: () => editBundle(bundle.name) }, "Edit")),
-      h("div", { class: "mono sub", text: bundle.folder }),
-      h("div", {}, "tracker ", h("span", { class: "mono", text: trackerText(bundle.tracker) })),
-      h("div", { class: "sub", text: `repositories ${bundle.repos.join(", ")}${bundle.places.length ? "; places " + bundle.places.join(", ") : ""}; ${bundle.systems ? "runs on " + bundle.systems.join(", ") : "runs on every system"}` })));
-  }
-}
-
-function editBundle(name) {
-  const kept = state.bundleRaw[name];
-  if (!kept) return;
-  const raw = copy(kept.bundle);
-  const root = h("div");
-  const server = h("input", { value: (raw.tracker || {}).server || "", placeholder: "alice/projects/<name>.os" });
-  const repos = h("input", { value: (raw.repos || []).join(", ") });
-  const places = h("input", { value: (raw.places || []).join(", ") });
-  const systems = ["windows", "macos", "linux"].map((s) => h("input", { type: "checkbox", value: s, checked: !raw.systems || raw.systems.includes(s) }));
-  const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults]]);
-  const settings = settingsEditor(raw.settings || {}, beneath);
-  root.append(
-    field("tracker", "The tracker's name on the Overseer server.", server, "tracker"),
-    field("repositories", "The project's names for its repositories, comma separated; sessions run in the first.", repos, "repos"),
-    field("places", "Folders the brief names that are not repositories, comma separated.", places, "places"),
-    field("systems", "The systems the project runs on.", h("span", { class: "group" }, systems.map((box) => h("label", { class: "group" }, box, box.value))), "systems"),
-    h("h3", { text: "Run settings for the project" }), settings.el);
-  const list = (input) => input.value.split(",").map((x) => x.trim()).filter(Boolean);
-  const body = {
-    el: root,
-    mark(f) {
-      markInputs(root, f);
-      settings.mark(f.replace(/^settings\./, ""));
-    },
-  };
-  openEditor(`The bundle ${name}`, body, async () => {
-    raw.tracker = { server: server.value.trim() };
-    raw.repos = list(repos);
-    if (list(places).length) raw.places = list(places);
-    else delete raw.places;
-    const chosen = systems.filter((b) => b.checked).map((b) => b.value);
-    if (chosen.length === 3) delete raw.systems;
-    else raw.systems = chosen;
-    raw.settings = settings.collect();
-    try {
-      const data = await api("PUT", `/api/bundles/${encodeURIComponent(name)}`, { version: kept.version, bundle: raw });
-      state.bundleRaw[name] = data;
-    } catch (error) {
-      if (error.status === 409) {
-        await loadBundles();
-        throw new ApiError(409, { error: "The bundle was changed since it was read; it is read again now: open it again." });
-      }
-      throw error;
-    }
-    say(`${name} saved.`);
-    renderBundles();
-    loadLoops().catch(failed);
-  });
 }
 
 // Starting the page

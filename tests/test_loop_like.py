@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from agentloop import config, loop, runner
-from test_loop import FakeClock, item, make_repo, tracker_text
+from test_loop import FakeClock, item, make_repo
+from test_loop import served as serve_tracker
 
 
 windows = pytest.mark.skipif(sys.platform != "win32", reason="the script's mutex is Windows' own")
@@ -133,20 +134,16 @@ class Served:
         monkeypatch.setenv("AGENTLOOP_HOME", str(tmp_path / "home"))
         self.tmp = tmp_path
         self.project = unique()
-        self.tracker = overseer.document(tracker_text(*(item(h, "ready", complexity="low") for h in ("alpha", "beta"))))
+        self.tracker = serve_tracker(overseer, *(item(h, "ready", complexity="low") for h in ("alpha", "beta")),
+                                     name=self.project)
         self.code = {"one": make_repo(tmp_path / "code", {"README.md": "code\n"}),
                      "two": make_repo(tmp_path / "code-2", {"README.md": "code\n"})}
-        bundle = config.paths().bundles / self.project
-        bundle.mkdir(parents=True)
-        (bundle / "brief.md").write_text("# The brief\n", encoding="utf-8")
-        config.save_json(bundle / "project.json", {"format": 1, "name": self.project, "tracker": {"server": self.tracker},
-                                                   "repos": ["code"], "settings": {}})
         account = tmp_path / "account"
         account.mkdir()
         config.save_json(config.paths().settings, {
-            "format": 1, "bundles": [str(bundle)],
+            "format": 1,
             "workers": [{"name": "w", "claude": str(account), "overseer": overseer.worker}],
-            "loops": [{"name": "one", "project": self.project, "worker": "w", "repos": {"code": str(self.code["one"])},
+            "loops": [{"name": "one", "tracker": self.tracker, "worker": "w", "repos": {"code": str(self.code["one"])},
                        "settings": {"trial": None}},
                       {"name": "two", "like": "one", "repos": {"code": str(self.code["two"])}},
                       {"name": "three", "like": "one"}],

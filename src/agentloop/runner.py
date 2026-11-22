@@ -77,7 +77,8 @@ class LoopStatus:
     name: str
     project: str
     # starting, running, waiting (on a usage limit), idle (on an empty queue), held (on a changed
-    # definition to accept, or a path to give - item doc-change), stopping, stopped or failed.
+    # definition to accept, or a path to give - item doc-change), paused (at its worker's own usage
+    # limit - item h87x), stopping, stopped or failed.
     state: str
     alive: bool
     pid: int | None = None
@@ -90,6 +91,9 @@ class LoopStatus:
     until: str | None = None
     # Idle, and hearing its tracker's changes as they are made (item instant-auto).
     watching: bool = False
+    # Paused: the window past its worker's limit - its key and name, the share used and the limit,
+    # and when it resets (item h87x).
+    over: dict | None = None
     started: str | None = None
     ended: str | None = None
     exit: int | None = None
@@ -97,6 +101,11 @@ class LoopStatus:
     error: str | None = None
     # Set when the project is being worked by something else: another loop on it, or the script.
     busy: str | None = None
+    # The Overseer account its key signs in as, once an item mentions one, and the items held for
+    # other accounts by their mentions, as {handle, bots, names}: usernames, and the display names
+    # the page shows them by (item assign-bot).
+    account: str | None = None
+    others: list | None = None
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -213,15 +222,15 @@ def busy(found: config.Loop) -> str | None:
         return None
     # The project as last read: a check before a start never waits on the server.
     try:
-        bundle = definition.project_for(machine, found, loop_mod.loop_dir(found.project, found.name), read=False).project
+        project = definition.project_for(machine, found, loop_mod.loop_dir(found.project, found.name), read=False).project
     except config.ConfigError:
         return None
-    if bundle is None:
+    if project is None:
         return None
-    mine = set(config.tops(found, bundle, remembered_top))
+    mine = set(config.tops(found, project, remembered_top))
     for name in others:
         other = machine.settings.loop(name)
-        if other is not None and mine & set(config.tops(other, bundle, remembered_top)):
+        if other is not None and mine & set(config.tops(other, project, remembered_top)):
             return f"{name} is running in a repository it shares with this one"
     return None
 

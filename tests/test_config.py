@@ -20,19 +20,22 @@ def test_the_examples_load():
     settings = config.load_settings(EXAMPLES / "settings.json")
     assert [w.name for w in settings.workers] == ["account1", "account2"]
     assert settings.loop("orchard").worker == "account2"
-    assert settings.defaults == {"stopAtWeeklyUse": 0.9}
-    quill = config.load_bundle(EXAMPLES / "quill")
-    assert quill.tracker.server == "alice/projects/quill.os"
-    orchard = config.load_bundle(EXAMPLES / "orchard")
-    assert orchard.tracker.server == "alice/projects/orchard.os"
-    assert orchard.repo_names() == ["orchard", "orchard-server", "orchard-docs"]
+    assert settings.defaults == {"askEveryMinutes": 60}
+    assert (settings.loop("quill").project, settings.loop("quill").tracker) == ("quill", "alice/projects/quill.os")
+    assert settings.loop("orchard").tracker == "alice/projects/orchard.os"
+
+
+def _project(name="p", repos=("code",), places=(), systems=None, settings=None) -> config.Project:
+    """A project as its definition gives it."""
+    return config.Project(name=name, tracker=config.Tracker(f"alice/projects/{name}.os"), repos=list(repos),
+                          settings=settings or {}, raw={}, systems=systems, places=list(places))
 
 
 def test_settings_layer_over_each_other():
-    orchard = config.load_bundle(EXAMPLES / "orchard")
+    orchard = {"routes": {"low": {"model": "opus", "effort": "medium"}}, "buildInTriageUpTo": 1}
     settings = config.load_settings(EXAMPLES / "settings.json")
-    result = config.effective_settings(settings.defaults, orchard.settings, {"buildInTriageUpTo": 3, "routes": {"high": {"model": "sonnet", "effort": "max"}}})
-    assert result["stopAtWeeklyUse"] == 0.9
+    result = config.effective_settings(settings.defaults, orchard, {"buildInTriageUpTo": 3, "routes": {"high": {"model": "sonnet", "effort": "max"}}})
+    assert result["askEveryMinutes"] == 60
     assert result["buildInTriageUpTo"] == 3
     # Routes merge one by one, as the script merges a project's Routes over its own.
     assert result["routes"]["low"] == {"model": "opus", "effort": "medium"}
@@ -45,7 +48,8 @@ def test_settings_layer_over_each_other():
 
 def test_a_missing_settings_file_is_an_empty_one(tmp_path):
     settings = config.load_settings(tmp_path / "settings.json")
-    assert settings.workers == [] and settings.loops == [] and settings.bundles == []
+    assert settings.workers == [] and settings.loops == []
+    assert "bundles" not in config.empty_settings()
 
 
 def _example_settings():
@@ -82,6 +86,11 @@ def test_an_overseer_library_from_older_settings_is_let_be(tmp_path):
     (lambda s: s["workers"][0].update(signIn={"password": "X"}), "workers[0].signIn: null for the folder's login"),
     (lambda s: s["workers"][0].update(signIn={"token": "A", "apiKey": "B"}), "workers[0].signIn: null for the folder's login"),
     (lambda s: s["workers"][0].update(signIn="TOKEN"), "workers[0].signIn: null for the folder's login"),
+    (lambda s: s["workers"][0].update(limits=0.8), "workers[0].limits: null, or each window's share"),
+    (lambda s: s["workers"][0].update(limits={"five_hour": 80}), "workers[0].limits.five_hour: a share from 0 to 1"),
+    (lambda s: s["workers"][0].update(limits={"five_hour": True}), "workers[0].limits.five_hour: a share from 0 to 1"),
+    (lambda s: s["workers"][0].update(limits={"Five Hour": 0.5}), "workers[0].limits: 'Five Hour' is not a window's name"),
+    (lambda s: s["workers"][0].update(limits={"overage": 0.5}), "workers[0].limits.overage: 0 for none, or null"),
 ])
 def test_wrong_settings_are_said_plainly(tmp_path, change, says):
     raw = _example_settings()
@@ -99,18 +108,7 @@ def test_not_json_names_the_line(tmp_path):
         config.load_settings(path)
 
 
-def _bundle(tmp_path, folder, **changes):
-    raw = {"format": 1, "name": folder, "tracker": {"server": f"alice/projects/{folder}.os"}, "repos": [folder], "settings": {}}
-    raw.update(changes)
-    _write(tmp_path / folder / "project.json", raw)
-    return tmp_path / folder
-
-
 @pytest.mark.parametrize("changes, says", [
-    ({"name": "other"}, 'x/project.json: name: is "other", but the bundle\'s folder is "x"'),
-    ({"tracker": {"repo": "docs"}}, "x/project.json: tracker: {\"server\": the tracker's name on the server}"),
-    ({"tracker": {"repo": "docs", "path": "x.os"}}, "x/project.json: tracker: names a file in a repository, and trackers are kept only on an Overseer server"),
-    ({"tracker": {"server": ""}}, "tracker.server"),
     ({"repos": []}, "repos: names no repository for the sessions to run in"),
     ({"repos": ["x", "x"]}, "repos: names a repository twice"),
     ({"repos": ["X"]}, "repos[0]"),
@@ -123,22 +121,30 @@ def _bundle(tmp_path, folder, **changes):
     ({"places": ["Tool"]}, "places[0]: a place's name"),
     ({"places": ["tool", "tool"]}, "places: names a place twice"),
 ])
-def test_wrong_bundles_are_said_plainly(tmp_path, changes, says):
+def test_wrong_projects_are_said_plainly(changes, says):
     with pytest.raises(ConfigError) as error:
-        config.load_bundle(_bundle(tmp_path, "x", **changes))
+        config.check_project({"repos": ["x"], "settings": {}, **changes}, "x definition")
     assert says in str(error.value)
 
 
-def test_a_loop_on_an_unknown_bundle(tmp_path):
-    raw = config.empty_settings()
-    raw["bundles"] = [str(_bundle(tmp_path, "a"))]
-    raw["workers"] = [{"name": "w", "claude": None, "overseer": None}]
-    raw["loops"] = [{"name": "l", "project": "b", "worker": "w", "repos": {}, "settings": {}}]
-    with pytest.raises(ConfigError, match=r'loops\[0\].project: no bundle named "b"'):
-        config.load_machine(_write(tmp_path / "settings.json", raw))
-    raw["loops"][0]["project"] = "a"
-    machine = config.load_machine(_write(tmp_path / "settings.json", raw))
+def test_local_bundles_are_refused_and_an_empty_list_is_dropped(tmp_path):
+    """Bundles are gone (item drop-bundle-source): a loop that names one, or settings that list one,
+    would not run, and are said; the empty list settings written before held loads, and saving the
+    settings again leaves it out."""
+    raw = _example_settings()
+    raw["loops"][0] = {"name": "quill", "project": "quill", "worker": "account1", "repos": {}}
+    with pytest.raises(ConfigError, match=r"loops\[0\]\.project: names a local bundle, and bundles are gone"):
+        config.load_settings(_write(tmp_path / "a.json", raw))
+    raw = _example_settings()
+    raw["bundles"] = ["~/src/bundles/quill"]
+    with pytest.raises(ConfigError, match=r"bundles: local bundles are gone"):
+        config.load_settings(_write(tmp_path / "b.json", raw))
+    raw["bundles"] = []
+    path = _write(tmp_path / "settings.json", raw)
+    machine = config.load_machine(path)
     assert config.loop_settings(machine, machine.settings.loops[0])["repeatUpTo"] == 2
+    config.save_settings(raw, path)
+    assert "bundles" not in json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_save_keeps_unknown_keys_and_order(tmp_path):
@@ -163,6 +169,15 @@ def test_a_workers_sign_in_loads(tmp_path):
     del raw["workers"][0]["signIn"]
     raw["workers"][1]["signIn"] = None
     assert [w.sign_in_kind for w in config.load_settings(_write(tmp_path / "b.json", raw)).workers] == [None, None]
+
+
+def test_a_workers_limits_load(tmp_path):
+    raw = _example_settings()
+    raw["workers"][0]["limits"] = {"five_hour": 0.8, "seven_day": 1, "seven_day_sonnet": None, "overage": 0}
+    raw["workers"][1]["limits"] = {"five_hour": None}
+    one, two = config.load_settings(_write(tmp_path / "a.json", raw)).workers
+    assert one.limits == {"five_hour": 0.8, "seven_day": 1.0, "overage": 0.0}
+    assert two.limits is None
 
 
 def test_a_workers_manager_loads_and_is_saved(tmp_path):
@@ -218,18 +233,12 @@ def _loop(repos):
     return config.Loop("l", "p", "w", {name: str(folder).replace("\\", "/") for name, folder in repos.items()}, {})
 
 
-def _repo_bundle(tmp_path, tracker, repos):
-    folder = tmp_path / "bundles" / "p"
-    _write(folder / "project.json", {"format": 1, "name": "p", "tracker": tracker, "repos": repos})
-    return config.load_bundle(folder)
-
-
 def test_place_repos_merges_one_repository_named_twice(tmp_path):
     code = _git_repo(tmp_path / "code")
     docs = _git_repo(tmp_path / "docs")
     (code / "web").mkdir()
-    bundle = _repo_bundle(tmp_path, {"server": "alice/projects/p.os"}, ["code", "web", "docs"])
-    placed = config.place_repos(_loop({"code": code, "web": code / "web", "docs": docs}), bundle)
+    project = _project(repos=["code", "web", "docs"])
+    placed = config.place_repos(_loop({"code": code, "web": code / "web", "docs": docs}), project)
     # code and web are one repository.
     assert placed.tops == [code.resolve(), docs.resolve()]
     assert placed.folders["web"] == code / "web"
@@ -240,24 +249,20 @@ def test_place_repos_says_what_is_missing(tmp_path):
     code = _git_repo(tmp_path / "code")
     plain = tmp_path / "plain"
     plain.mkdir()
-    bundle = _repo_bundle(tmp_path, {"server": "alice/projects/p.os"}, ["code", "docs"])
+    project = _project(repos=["code", "docs"])
     with pytest.raises(ConfigError, match=r'loop "l": repos.docs: p uses the repository docs, and this loop does not say where'):
-        config.place_repos(_loop({"code": code}), bundle)
+        config.place_repos(_loop({"code": code}), project)
     with pytest.raises(ConfigError, match=r"repos.docs: is not in a git repository"):
-        config.place_repos(_loop({"code": code, "docs": plain}), bundle)
+        config.place_repos(_loop({"code": code, "docs": plain}), project)
     with pytest.raises(ConfigError, match=r"repos.docs: no such folder"):
-        config.place_repos(_loop({"code": code, "docs": tmp_path / "gone"}), bundle)
+        config.place_repos(_loop({"code": code, "docs": tmp_path / "gone"}), project)
 
 
-def test_the_examples_say_systems_places_and_the_overseer():
+def test_the_examples_say_places_and_the_overseer():
     settings = config.load_settings(EXAMPLES / "settings.json")
     assert not hasattr(settings, "overseer")
     assert settings.loop("quill").places == {"press": "C:/Program Files/Press"}
     assert settings.loop("orchard").places == {}
-    quill = config.load_bundle(EXAMPLES / "quill")
-    assert (quill.systems, quill.places) == (["windows"], ["press"])
-    assert config.load_bundle(EXAMPLES / "orchard").systems == ["windows", "macos", "linux"]
-    assert config.load_bundle(EXAMPLES / "orchard").places == []
 
 
 @pytest.mark.parametrize("platform, system", [("win32", "windows"), ("darwin", "macos"), ("linux", "linux"), ("freebsd14", "linux")])
@@ -267,11 +272,10 @@ def test_this_system(monkeypatch, platform, system):
 
 
 def test_a_project_runs_only_on_its_systems(tmp_path, monkeypatch):
-    windows = config.load_bundle(_bundle(tmp_path, "w", systems=["windows"]))
-    anywhere = config.load_bundle(_bundle(tmp_path, "a"))
-    assert anywhere.systems is None
+    windows = _project("w", systems=["windows"])
+    anywhere = _project("a")
     monkeypatch.setattr(config.sys, "platform", "darwin")
-    with pytest.raises(ConfigError, match=r"^w/project.json: systems: w runs on windows, not on macos$"):
+    with pytest.raises(ConfigError, match=r"^alice/projects/w.os definition: systems: w runs on windows, not on macos$"):
         config.check_system(windows)
     config.check_system(anywhere)
     monkeypatch.setattr(config.sys, "platform", "win32")
@@ -282,19 +286,16 @@ def test_place_repos_places_the_folders_that_are_not_repositories(tmp_path):
     code = _git_repo(tmp_path / "code")
     tool = tmp_path / "Program Files" / "tool"
     tool.mkdir(parents=True)
-    folder = tmp_path / "bundles" / "p"
-    _write(folder / "project.json", {"format": 1, "name": "p", "tracker": {"server": "alice/projects/p.os"},
-                                     "repos": ["code"], "places": ["tool"]})
-    bundle = config.load_bundle(folder)
+    project = _project(places=["tool"])
     loop = _loop({"code": code})
     with pytest.raises(ConfigError, match=r'loop "l": places.tool: p names the folder tool, and this loop does not say where it is'):
-        config.place_repos(loop, bundle)
+        config.place_repos(loop, project)
     loop.places = {"tool": str(tmp_path / "gone")}
     with pytest.raises(ConfigError, match=r"places.tool: no such folder"):
-        config.place_repos(loop, bundle)
+        config.place_repos(loop, project)
     # A place is not a repository, and is never one of the tops to commit in.
     loop.places = {"tool": str(tool).replace("\\", "/")}
-    placed = config.place_repos(loop, bundle)
+    placed = config.place_repos(loop, project)
     assert placed.places == {"tool": tool}
     assert placed.tops == [code.resolve()]
 
@@ -341,8 +342,8 @@ def test_a_copy_may_come_before_the_loop_it_is_like(tmp_path):
     (lambda s: s["loops"].append({"name": "x", "like": "x"}), 'loops[2].like: no other loop named "x"'),
     (lambda s: s["loops"].extend([{"name": "x", "like": "quill"}, {"name": "y", "like": "x"}]),
      'loops[3].like: "x" is itself a copy of "quill"; name that loop'),
-    (lambda s: s["loops"].append({"name": "x", "like": "quill", "project": "orchard"}),
-     "loops[2].project: a copy works the project of the loop it is like, quill"),
+    (lambda s: s["loops"].append({"name": "x", "like": "quill", "tracker": "alice/projects/orchard.os"}),
+     "loops[2].tracker: a copy works the project of the loop it is like, alice/projects/quill.os"),
     (lambda s: s["loops"].append({"name": "x", "like": "quill", "worker": "nobody"}), 'loops[2].worker: no worker named "nobody"'),
     (lambda s: s["loops"].append({"name": "x", "like": 3}), "loops[2].like: the name of the loop this one is a copy of"),
 ])
@@ -373,14 +374,14 @@ def test_deleting_a_loop_that_has_copies_would_not_load(tmp_path):
 
 
 def test_a_retired_setting_is_accepted_and_dropped(tmp_path):
-    """maxIterations is gone (item no-limits); a file or definition that still says it loads, and
-    saving it again leaves it out."""
+    """maxIterations is gone (item no-limits), and stopAtWeeklyUse (item h87x); a file or
+    definition that still says either loads, and saving it again leaves it out."""
     path = tmp_path / "settings.json"
     raw = _example_settings()
-    raw["defaults"] = {"maxIterations": 5, "chainUpTo": 1}
-    raw["loops"][0]["settings"] = {"maxIterations": 9}
+    raw["defaults"] = {"maxIterations": 5, "chainUpTo": 1, "stopAtWeeklyUse": 0.9}
+    raw["loops"][0]["settings"] = {"maxIterations": 9, "stopAtWeeklyUse": 0.5}
     settings = config.save_settings(raw, path)
     assert settings.defaults == {"chainUpTo": 1} and settings.loop("quill").settings == {}
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["defaults"] == {"chainUpTo": 1} and saved["loops"][0]["settings"] == {}
-    assert "maxIterations" not in config.DEFAULTS
+    assert "maxIterations" not in config.DEFAULTS and "stopAtWeeklyUse" not in config.DEFAULTS

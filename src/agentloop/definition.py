@@ -18,8 +18,9 @@ document has changed at all, by the version it holds, which costs a 304 while it
 
 A definition can list the project's tools (item tools-fetch): plain files kept beside the definition
 document, each with its sha256 and the systems it is for (overseer:definition-files). Those for this
-machine's system are fetched into `project/tools/` in the loop's folder, which `{bundle}` names as it
-names a bundle's folder, so a brief's `{bundle}/tools/probe.ps1` reads the same either way. A file
+machine's system are fetched into `project/tools/` in the loop's folder, which `{bundle}` names - the
+name kept from when a project was a bundle folder on this PC, so a description's
+`{bundle}/tools/probe.ps1` still reads as it did. A file
 whose hash is not the one the definition lists is never written. The hashes are part of the
 definition, so a changed tool is a changed definition: its files wait in `project-pending/` while
 the change does, and the ones it replaced stay in `project-previous/` until it is dismissed, for
@@ -72,7 +73,7 @@ class Unreachable(Exception):
 @dataclass
 class Loaded:
     """A loop's project, and what the loop should say about where it came from: None when it is
-    the definition just read, or a bundle."""
+    the definition just read."""
 
     project: config.Project | None
     note: str | None = None
@@ -87,8 +88,7 @@ class Loaded:
 
 def fetch(server: str, key_file: Path, tracker: str, timeout: float = 30.0) -> dict:
     """The tracker's definition, as the shape `project.json` has - `repos` and `places` as
-    {"name", "about"} in order, `systems` a list or None, `settings` an object - checked as a
-    bundle's project is. Raises Unreachable when the server cannot be asked, and ConfigError when it
+    {"name", "about"} in order, `systems` a list or None, `settings` an object - checked. Raises Unreachable when the server cannot be asked, and ConfigError when it
     answers with something that is no definition."""
     where = f"{tracker} definition"
     key = key_file.read_text(encoding="utf-8").strip()
@@ -188,7 +188,7 @@ def from_node(node: dict, where: str) -> dict:
         # A repository may name where it is cloned from, and its branch (item clone).
         "repos": _entries(_child(node, "Repos"), ("about", "url", "branch")),
         "places": _entries(_child(node, "Places")),
-        # Empty means every system, as a bundle's absent `systems` does.
+        # Empty means every system, as an absent `systems` does.
         "systems": systems or None,
         "settings": settings,
     }
@@ -215,7 +215,6 @@ def project(tracker: str, raw: dict, read_version: str | None = None, loop_dir: 
     places, place_about = config.entry_names(raw.get("places"))
     return config.Project(
         name=config.tracker_project(tracker) or tracker,
-        folder=None,
         tracker=config.Tracker(server=tracker),
         repos=repos,
         settings=raw.get("settings") or {},
@@ -224,7 +223,6 @@ def project(tracker: str, raw: dict, read_version: str | None = None, loop_dir: 
         places=places,
         about={**about, **place_about},
         description=raw.get("description") or "",
-        source="tracker",
         version=read_version or version(raw),
         files=loop_dir / FILES if loop_dir is not None and config.tools_here(raw) else None,
     )
@@ -266,7 +264,7 @@ def tool_sha256(data: bytes) -> str:
 
 def tool_matches(data: bytes, sha256: str) -> bool:
     """Whether a tool's bytes are the file a definition lists by `sha256`: its normalised hash; or,
-    as definitions exported before item tools-eol list it, the hash of the bundle's copy as it was,
+    as definitions exported before item tools-eol list it, the hash of the exported copy as it was,
     which had LF or CRLF - so the hash of this text with either is taken too."""
     return sha256 in (tool_sha256(data), _sha256(data), _sha256(_crlf(data)))
 
@@ -451,19 +449,13 @@ def _held(path: Path, tracker: str) -> dict | None:
 
 def project_for(machine: config.Machine, loop: config.Loop, loop_dir: Path, *, read: bool = True,
                 timeout: float = 30.0, worker: str | None = None) -> Loaded:
-    """The project a loop works. A bundle's, from the machine. A tracker's: with `read`, the
-    definition read from the server and settled against the copy accepted (`settle`), or the copy
+    """The project a loop works, read from its tracker: with `read`, the definition read from the server and settled against the copy accepted (`settle`), or the copy
     when the server cannot be reached, saying so; without, only the copy - the page's, which never
     waits on the network - or none. A change waiting to be accepted leaves the project the one
     accepted before it, with `pending` set.
 
     A definition that the server gives and that fails its checks is a ConfigError even when a copy
     is kept: a wrong definition is not an outage, and is to be put right on the server."""
-    if loop.tracker is None:
-        found = machine.bundle(loop.project)
-        if found is None:
-            raise config.ConfigError(f'loop "{loop.name}"', "project", f'no bundle named "{loop.project}" in bundles')
-        return Loaded(found)
     tracker = loop.tracker
     held = kept(loop_dir, tracker)
     waiting = pending(loop_dir, tracker) is not None
@@ -995,112 +987,3 @@ def clone(settings: config.Settings, address: str, key_file: str | None, worker:
     cloned = clones.clone(repo, where, entry["url"], entry.get("branch", ""), interactive=interactive)
     return {"folder": folder.strip(), "cloned": cloned}
 
-
-# Moving a loop from its bundle to its tracker (item retarget)
-
-def _inside(path: Path, folder: Path) -> bool:
-    try:
-        return path.resolve().is_relative_to(folder.resolve())
-    except OSError:
-        return False
-
-
-def retarget(machine: config.Machine, name: str, address: str | None = None, *, timeout: float = 30.0,
-             top_of: Callable[[Path], Path | None] = config.repo_top) -> dict:
-    """A loop on a bundle moved to its tracker, keeping this machine's paths: the definition read
-    from the tracker - the address given, else the bundle's `tracker.server` - and checked as `add`
-    checks a new loop, against the paths the loop has now; then the loop saved with `tracker` in
-    place of `project`, the definition kept as its copy with its tools, and the bundle dropped from
-    `bundles` once no loop uses it.
-
-    The loops that are copies of it (`like`) work its project, and move with it, each checked and
-    given its copy too. A running loop is refused, as is a tracker whose project is not the
-    bundle's: the loop's folder - its output, its status, its run lock - is named after the
-    project, and would be left behind. Nothing is saved while anything is wrong.
-
-    Returns {"loop", "tracker", "server", "moved" (the loops moved), "bundleDropped", "repoint"
-    (each path inside a bundle's folder, as "repos.x" or "places.x", for the bundles are going
-    away)}. Refusals name every problem at once; Unreachable is the server not answering."""
-    from agentloop import loop as loop_mod  # loop imports this module
-    from agentloop import runner
-
-    settings = machine.settings
-    where = f'loop "{name}"'
-    found = settings.loop(name)
-    if found is None:
-        raise Refusals([config.ConfigError(where, "name", f"no loop named {name}")])
-    if found.like is not None:
-        raise Refusals([config.ConfigError(where, "like", f"a copy works the project of the loop it is like: retarget {found.like}")])
-    if found.tracker is not None:
-        raise Refusals([config.ConfigError(where, "tracker", f"reads its project from {found.tracker} already")])
-    bundle = machine.bundle(found.project)
-    assert bundle is not None and bundle.folder is not None  # load_machine refuses a loop on no bundle
-    moving = [found] + [l for l in settings.loops if l.like == name]
-
-    # The loop's own server, when it has one, reaches the tracker as it reached it before; a name
-    # alone is put on it, since `_reach` would otherwise take the worker's.
-    address = (address or "").strip() or bundle.tracker.server
-    if found.overseer and "://" not in address:
-        address = f"{str(found.overseer['server']).rstrip('/')}/doc/{address}"
-    key_file = (found.overseer or {}).get("keyFile")
-    server, key, tracker, own = _reach(settings, address, key_file, found.worker)
-
-    problems: list[config.ConfigError] = []
-    for each in moving:
-        if runner.held(each):
-            problems.append(config.ConfigError(f'loop "{each.name}"', "running", "is running: stop it first"))
-    raw = fetch(server, config.expand(key), tracker, timeout)
-    project_found = project(tracker, raw)
-    if project_found.name != bundle.name:
-        problems.append(config.ConfigError(where, "tracker", f"{tracker} is the project {project_found.name}, and the loop's is "
-                                           f"{bundle.name}: its folder and run lock are named after it"))
-    try:
-        config.check_system(project_found)
-    except config.ConfigError as error:
-        problems.append(error)
-    for each in moving:
-        candidate = config.Loop(each.name, project_found.name, each.worker, each.repos, each.settings, each.places,
-                                tracker=tracker)
-        problems.extend(config.missing(candidate, project_found, top_of))
-    if problems:
-        raise Refusals(problems)
-
-    # The tools for this system fetched for each loop before anything is saved, as `add` does.
-    get = file_getter(server, config.expand(key), tracker, timeout)
-    for each in moving:
-        try:
-            place_tools(raw, loop_mod.loop_dir(project_found.name, each.name) / FILES, get, where=f"{tracker} definition")
-        except config.ConfigError as error:
-            raise Refusals([config.ConfigError(where, "tools", error.message)]) from None
-
-    changed = json.loads(json.dumps(settings.raw))
-    names = {each.name for each in moving}
-    for entry in changed.get("loops", []):
-        if entry.get("name") == name:
-            entry.pop("project", None)
-            entry["tracker"] = tracker
-            if own:
-                entry["overseer"] = {"server": server, "keyFile": key}
-        elif entry.get("name") in names:
-            # A copy follows the loop it is like; one naming the bundle's project would now differ.
-            entry.pop("project", None)
-    used = any(l.tracker is None and l.project == bundle.name and l.name not in names for l in settings.loops)
-    dropped = False
-    if not used:
-        kept_bundles = [b for b in changed.get("bundles", []) if config.expand(b).resolve() != bundle.folder.resolve()]
-        dropped = len(kept_bundles) != len(changed.get("bundles", []))
-        changed["bundles"] = kept_bundles
-    config.save_settings(changed, settings.path)
-    for each in moving:
-        keep(loop_mod.loop_dir(project_found.name, each.name), tracker, raw)
-
-    # A path into any bundle's folder, not only this one's: a loop may name another project's
-    # tools (a game naming its engine fork's), and every bundle is leaving.
-    folders = [b.folder for b in machine.bundles.values() if b.folder is not None]
-    repoint = sorted({f"{kind}.{key_name}"
-                      for each in moving
-                      for kind, given in (("repos", each.repos), ("places", each.places))
-                      for key_name, path in given.items()
-                      if any(_inside(config.expand(path), folder) for folder in folders)})
-    return {"loop": name, "tracker": tracker, "server": server, "moved": [each.name for each in moving],
-            "bundleDropped": dropped, "repoint": repoint}

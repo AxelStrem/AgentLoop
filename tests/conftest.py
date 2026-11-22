@@ -113,6 +113,10 @@ TRACKER_PY = Path(__file__).resolve().parents[1] / "src" / "agentloop" / "tools"
 # The account the tests' agents act as, and its key: made up here, for a server of the tests' own.
 AGENT = "agent"
 AGENT_KEY = "agentloop-tests-key"
+# The other accounts the tests' server keeps, as (username, display name): names with markup and
+# spaces, and one that begins another, for the mentions of item assign-bot.
+PEOPLE = [("someone", "**Some** One <icon=bot>"), ("zombo", "Zombo"), ("zombobot", "<color=red | Zombo Bot>"),
+          ("ap31", "Dmitrii")]
 
 
 class Overseer:
@@ -172,12 +176,16 @@ def overseer_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Overse
     root = work / "documents"
     root.mkdir()
     accounts = work / "accounts.json"
+    # Never signed in with: only the key is used, so the password's hash only has to read as one.
+    password = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g"
     accounts.write_text(json.dumps({"accounts": [{
-        "username": AGENT, "name": "Agent", "admin": True, "sessions": [],
-        # Never signed in with: only the key is used, so the password's hash only has to read as one.
-        "password": "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g",
+        "username": AGENT, "name": "Agent", "admin": True, "sessions": [], "password": password,
         "keys": [{"name": "tests", "hash": hashlib.sha256(AGENT_KEY.encode()).hexdigest(), "made": "2026-10-01T00:00:00Z"}],
-    }], "invites": []}), encoding="utf-8")
+    }] + [
+        # Others the directory names, for mentions to name (item assign-bot): no key reaches them.
+        {"username": username, "name": name, "admin": False, "sessions": [], "password": password, "keys": []}
+        for username, name in PEOPLE
+    ], "invites": []}), encoding="utf-8")
     key = work / "key"
     key.write_text(AGENT_KEY, encoding="utf-8")
     # A copy runs, not the build's own: Windows locks a running executable.

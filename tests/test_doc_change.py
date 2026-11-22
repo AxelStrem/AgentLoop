@@ -106,7 +106,7 @@ def test_a_definition_may_not_say_how_its_changes_are_accepted(overseer):
 
 
 def test_accept_definition_is_auto_or_ask(tmp_path):
-    raw = {"format": 1, "bundles": [], "workers": [], "loops": [], "defaults": {"acceptDefinition": "sometimes"}}
+    raw = {"format": 1, "workers": [], "loops": [], "defaults": {"acceptDefinition": "sometimes"}}
     with pytest.raises(config.ConfigError) as caught:
         config.parse_settings(raw, tmp_path / "settings.json")
     assert caught.value.field == "defaults.acceptDefinition"
@@ -167,7 +167,7 @@ def test_auto_goes_on_with_a_change_and_shows_it(changing, fake_claude):
     assert p.r.run() == 0
     assert p.show("beta")["stage"] == "testing"
     assert "definition has changed, and this run goes on with the new one" in p.text
-    assert p.r.bundle.description == "Changed while it ran, in {code}."
+    assert p.r.project_def.description == "Changed while it ran, in {code}."
     assert "Changed while it ran, in " in p.r.system_file.read_text(encoding="utf-8")
     shown = definition.change(p.folder, p.tracker)
     assert shown["pending"] is False and f"-{DESCRIPTION.splitlines()[0]}" in shown["diff"]["description"]
@@ -204,7 +204,7 @@ def test_a_change_waiting_from_before_holds_the_first_session(changing, fake_cla
     p.run()
     p.change(description="Changed while it was stopped.")
     r = p.run()
-    assert r.bundle.description == DESCRIPTION
+    assert r.project_def.description == DESCRIPTION
     p.while_held(lambda: r.kill_file.write_text(""))
     assert r.run() == 0
     assert "Stopped at once, as asked, while held." in p.text
@@ -241,7 +241,7 @@ def test_a_change_at_start_under_auto_is_said_first(changing, fake_claude):
     p.run()
     p.change(description="Changed while it was stopped.")
     r = p.run()
-    assert r.bundle.description == "Changed while it was stopped."
+    assert r.project_def.description == "Changed while it was stopped."
     assert "acceptDefinition is auto" in r.definition_note
 
 

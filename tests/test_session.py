@@ -20,7 +20,7 @@ def _spec(tmp_path: Path, *, resume=False, route=None, prompt="Work the item.", 
         prompt=prompt,
         route=route or Route("sonnet", "high"),
         workdir=work,
-        system_file=session.write_system_file(data / "system.md", "guide", "about", "brief"),
+        system_file=session.write_system_file(data / "system.md", "guide", "about"),
         settings=session.write_session_settings(data / "loop-settings.json"),
         log=data / "loop-1-build.jsonl",
         variables=variables if variables is not None else session.session_variables(
@@ -265,10 +265,8 @@ def test_describe_tool():
 # Files a session is given
 
 def test_system_file(tmp_path):
-    path = session.write_system_file(tmp_path / "system.md", "guide\r\n", "  about it \n", "brief ü")
-    assert path.read_bytes() == ("guide\r\n\n\n---\n\n# What the project is, as its tracker describes it\n\nabout it\n\n---\n\nbrief ü").encode("utf-8")
-    bare = session.write_system_file(tmp_path / "bare.md", "guide", " ", "brief")
-    assert bare.read_bytes() == b"guide\n\n---\n\nbrief"
+    path = session.write_system_file(tmp_path / "system.md", "guide\r\n", "  about it ü\n")
+    assert path.read_bytes() == "guide\r\n\n\n---\n\n# What the project is\n\nabout it ü\n".encode("utf-8")
 
 
 def test_placeholders_are_filled_and_other_braces_left():
@@ -279,11 +277,10 @@ def test_placeholders_are_filled_and_other_braces_left():
 
 def test_the_system_file_fills_in_the_machine(tmp_path):
     values = {"code": "C:/c", "tools": "C:/t"}
-    path = session.write_system_file(tmp_path / "system.md", "run {tools}/tracker.py", "about {code}", "in {code}/src",
+    path = session.write_system_file(tmp_path / "system.md", "run {tools}/tracker.py", "about {code}/src",
                                      where="# Where you are\n", values=values)
-    # The tracker's description is the owner's words, and is left as it is.
     assert path.read_bytes() == (b"run C:/t/tracker.py\n\n---\n\n# Where you are\n\n---\n\n"
-                                 b"# What the project is, as its tracker describes it\n\nabout {code}\n\n---\n\nin C:/c/src")
+                                 b"# What the project is\n\nabout C:/c/src\n")
 
 
 def test_the_windows_part_only_on_windows(monkeypatch):

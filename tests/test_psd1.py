@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agentloop import config, psd1
+from agentloop import config, export, psd1
 from agentloop.config import ConfigError
 
 # Made-up projects written as AgenticLoop/projects/*.psd1 are, each with a shape the importer
@@ -73,8 +73,8 @@ def _psd1(name: str, folder: Path) -> Path:
     return copy
 
 
-# What each converts to, its tracker on the server: the bundle's repos, the worker's claude, and the
-# loop's repos.
+# What each converts to, its tracker on the server: the project's repos, the Claude account its
+# sessions ran on, and where each repository is.
 CONVERTED = {
     "kiln": (["kiln"], "~/.claude-account1", {"kiln": "D:/Work/Kiln"}),
     "loom": (["loom-game"], "~/.claude-account2", {"loom-game": "D:/Work/studio/Loom Game"}),
@@ -112,13 +112,14 @@ def test_parses_as_powershell_does(name):
 @pytest.mark.parametrize("name", NAMES)
 def test_converts_each_psd1(name, tmp_path):
     path = _psd1(name, tmp_path)
-    bundle, worker, loop = psd1.convert(path, psd1.parse_file(path), _top_of)
+    found = psd1.convert(path, psd1.parse_file(path), _top_of)
     repos, claude, placed = CONVERTED[name]
-    assert bundle == {"format": 1, "name": name, "tracker": {"server": f"someone/projects/{name}.os"}, "repos": repos, "settings": {}}
-    assert worker["claude"] == claude
+    assert (found.source.name, found.source.tracker) == (name, f"someone/projects/{name}.os")
+    assert (found.source.repos, found.source.places, found.source.settings) == (repos, [], {})
+    assert found.claude == claude
     # The key file is under `~` on the PC whose home holds it, and written out in full anywhere else.
-    assert worker["overseer"] == {"server": SERVER, "keyFile": config.home_relative(KEY)}
-    assert loop == {"name": name, "project": name, "worker": "", "repos": placed, "settings": {}}
+    assert (found.server, found.key_file) == (SERVER, config.home_relative(KEY))
+    assert found.placed == placed
 
 
 @pytest.mark.parametrize("name", FILE_TRACKERS)
@@ -173,74 +174,50 @@ def home(tmp_path, monkeypatch):
     return config.paths()
 
 
-def test_import_writes_bundle_worker_and_loop(tmp_path, home):
-    for name in ("quill", "orchard"):
-        (tmp_path / f"{name}.psd1").write_text(_psd1(name, tmp_path).read_text(encoding="utf-8"), encoding="utf-8")
-        (tmp_path / f"{name}.md").write_text("# brief\n", encoding="utf-8")
-    (tmp_path / "quill").mkdir()
-    (tmp_path / "quill" / "look.ps1").write_text("# a tool\n", encoding="utf-8")
-
-    first = psd1.import_psd1(tmp_path / "quill.psd1", top_of=_top_of)
-    second = psd1.import_psd1(tmp_path / "orchard.psd1", top_of=_top_of)
-
-    # Both are on account 1: the worker is made once, and keeps the server quill gave it.
-    assert (first.worker, first.worker_made) == ("account1", True)
-    assert (second.worker, second.worker_made) == ("account1", False)
-    machine = config.load_machine(home.settings)
-    assert sorted(machine.bundles) == ["orchard", "quill"]
-    assert len(machine.settings.workers) == 1
-    assert machine.settings.workers[0].overseer["server"] == SERVER
-    assert [l.name for l in machine.settings.loops] == ["quill", "orchard"]
-    assert machine.settings.loop("orchard").repos == CONVERTED["orchard"][2]
-    bundle = machine.bundle("quill")
-    assert bundle.folder == home.bundles / "quill"
-    assert bundle.brief.read_text(encoding="utf-8") == "# brief\n"
-    assert (bundle.tools / "look.ps1").is_file()
-    assert not (machine.bundle("orchard").tools).exists()
-
-
-def test_import_refuses_a_second_time_unless_replacing(tmp_path, home):
-    path = _project(tmp_path, "heron", on_server("heron", (FIXTURES / "heron.psd1").read_text(encoding="utf-8")))
-    psd1.import_psd1(path, top_of=_top_of)
-    with pytest.raises(ConfigError, match='a loop named "heron" is there already'):
-        psd1.import_psd1(path, top_of=_top_of)
-    psd1.import_psd1(path, replace=True, top_of=_top_of)
-    settings = config.load_settings(home.settings)
-    assert [l.name for l in settings.loops] == ["heron"]
-    assert len(settings.bundles) == 1
-
-
-def test_import_to_another_folder(tmp_path, home):
+def test_import_writes_the_export_and_nothing_else(tmp_path, home):
     path = _project(tmp_path / "projects", "heron", on_server("heron", (FIXTURES / "heron.psd1").read_text(encoding="utf-8")), tools=True)
     (tmp_path / "projects" / "heron" / "__pycache__").mkdir()
     (tmp_path / "projects" / "heron" / "__pycache__" / "x.pyc").write_bytes(b"")
-    to = tmp_path / "repo" / "bundles"
-    done = psd1.import_psd1(path, top_of=_top_of, to=to)
-    assert done.bundle == to / "heron"
-    assert (to / "heron" / "brief.md").is_file() and (to / "heron" / "tools" / "look.ps1").is_file()
-    assert not (to / "heron" / "tools" / "__pycache__").exists()
-    assert not (home.bundles / "heron").exists()
-    machine = config.load_machine(home.settings)
-    assert machine.bundle("heron").folder == to / "heron"
-    # Imported again to the same folder, it is the same bundle, replaced.
-    psd1.import_psd1(path, top_of=_top_of, to=to, replace=True)
-    assert len(config.load_settings(home.settings).bundles) == 1
+    out = tmp_path / "out"
+    done = psd1.import_psd1(path, out, "The tracker's own.", top_of=_top_of)
+    report = done.report
+    assert report.definition == out / "heron.project.os" and report.tracker == "someone/projects/heron.os"
+    text = report.definition.read_text(encoding="utf-8")
+    assert '- description = "The tracker\'s own.\\n\\n# heron\\n"' in text
+    assert '- name = "heron"' in text
+    assert report.tools == ["look.ps1"] and (out / "tools" / "heron.project" / "look.ps1").is_file()
+    assert not (out / "tools" / "heron.project" / "__pycache__").exists()
+    # The loop is added from its tracker once the export is on the server: the line says how, with
+    # the .psd1's key file and repositories.
+    assert done.add_line() == (f"agentloop add {SERVER}/doc/someone/projects/heron.os --key-file {config.home_relative(KEY)} "
+                               "--repo heron=D:/Work/Heron")
+    # This machine's settings are not touched, and no bundle is made.
+    assert not home.settings.exists() and not (home.config / "bundles").exists()
+    # Nothing is written over.
+    with pytest.raises(ConfigError, match="is not an empty folder"):
+        psd1.import_psd1(path, out, "Again.", top_of=_top_of)
 
 
-def test_import_a_different_server_makes_another_worker(tmp_path, home):
-    a = _project(tmp_path, "one", "@{ Tracker = 'a/one.os'; Server = 'https://a/'; KeyFile = 'k'; Repos = @('D:/Work/Heron'); Account = 3 }")
-    b = _project(tmp_path, "two", "@{ Tracker = 'a/two.os'; Server = 'https://b'; KeyFile = 'k'; Repos = 'D:/Work/Maple'; Account = 3 }")
-    assert psd1.import_psd1(a, top_of=_top_of).worker == "account3"
-    assert psd1.import_psd1(b, top_of=_top_of).worker == "account3-2"
-    workers = config.load_settings(home.settings).workers
-    assert [w.overseer["server"] for w in workers] == ["https://a", "https://b"]
+def test_import_reads_the_trackers_description_with_the_psd1s_key(tmp_path, home, monkeypatch):
+    path = _project(tmp_path, "heron", on_server("heron", (FIXTURES / "heron.psd1").read_text(encoding="utf-8")))
+    asked = []
+    monkeypatch.setattr(export, "tracker_description", lambda server, key, tracker: asked.append((server, key, tracker)) or "Read.")
+    done = psd1.import_psd1(path, tmp_path / "out", top_of=_top_of)
+    assert asked == [(SERVER, config.expand(config.home_relative(KEY)), "someone/projects/heron.os")]
+    assert "Read." in done.report.definition.read_text(encoding="utf-8")
+
+
+def test_an_argument_with_a_space_is_quoted(tmp_path, home):
+    path = _project(tmp_path, "loom", on_server("loom", (FIXTURES / "loom.psd1").read_text(encoding="utf-8")))
+    done = psd1.import_psd1(path, tmp_path / "out", "", top_of=_top_of)
+    assert done.add_line().endswith('--repo "loom-game=D:/Work/studio/Loom Game"')
 
 
 def test_import_wants_a_brief(tmp_path, home):
     path = _project(tmp_path, "heron", on_server("heron", (FIXTURES / "heron.psd1").read_text(encoding="utf-8")), brief=False)
     with pytest.raises(ConfigError, match="no brief beside it, heron.md"):
-        psd1.import_psd1(path, top_of=_top_of)
-    assert not home.settings.exists()
+        psd1.import_psd1(path, tmp_path / "out", "", top_of=_top_of)
+    assert not (tmp_path / "out").exists()
 
 
 @pytest.mark.parametrize("body, says", [
@@ -265,8 +242,8 @@ def test_convert_takes_the_project_settings(tmp_path):
         BuildAfterTriage = 'high'
         BuildInTriageUpTo = 1
     }""")
-    bundle, _, _ = psd1.convert(path, psd1.parse_file(path), _top_of)
-    assert bundle["settings"] == {
+    found = psd1.convert(path, psd1.parse_file(path), _top_of)
+    assert found.source.settings == {
         "routes": {"low": {"model": "opus", "effort": "medium"}},
         "escalation": {"model": "opus", "effort": "high"},
         "buildAfterTriage": ["high"],
@@ -276,5 +253,4 @@ def test_convert_takes_the_project_settings(tmp_path):
 
 def test_the_default_account_is_no_folder(tmp_path):
     path = _project(tmp_path, "x", "@{ Tracker = 'a/x.os'; Server = 'https://a'; KeyFile = 'k'; Repos = 'D:/Work/Heron'; Account = '~/.claude' }")
-    _, worker, _ = psd1.convert(path, psd1.parse_file(path), _top_of)
-    assert worker["claude"] is None
+    assert psd1.convert(path, psd1.parse_file(path), _top_of).claude is None

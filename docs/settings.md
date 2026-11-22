@@ -241,6 +241,58 @@ When the server or the key file is not the worker's, the loop carries them as it
 (below), and the page shows the server's host beside its project. The worker is still the Claude
 account it runs on.
 
+### A project of the script's
+
+A project of `run-agent-loop.ps1` is a `projects/<name>.psd1` with its brief `<name>.md` and its
+tools folder `<name>/` beside it. `agentloop import-psd1 <file> --out <folder>` writes it out as
+what goes beside its tracker: the definition `<name>.project.os` - the tracker's own description,
+then the brief, less its opening paragraph and its table of `{name}` rows, whose lines become each
+repository's and place's `about` - and its tools under `tools/<name>.project/`. The tracker's
+description is read with the `.psd1`'s `Server` and `KeyFile`, or given with
+`--tracker-description <file>`. It prints the steps left - putting the files on the server, the
+line that points the tracker's mount at the definition, sharing it with the agents to read only -
+and the `agentloop add` line that adds the loop once they are done, with the `.psd1`'s key file and
+repositories. It writes nothing to this machine's settings.
+
+There are no local bundles: a project is only ever read from its tracker (item
+`drop-bundle-source`). Settings that list `bundles`, or a loop that names a `project` in place of
+its `tracker`, are refused, saying so; the empty `bundles` list settings written earlier hold is
+let be, and dropped when the settings are next saved.
+
+
+### Items for one bot
+
+An item is kept for particular bots by mentioning them: `@` and the Overseer account a bot's key
+signs in as, by its display name as the page shows it (its bold, colours and icons taken out, as
+Overseer's own `people::plain` does) or by its username, in any case. A display name may hold
+spaces, `@Zombo Bot`, and the longest name that fits is the one meant. A mention that runs on into a
+letter, a digit, `-` or `_` names no one, and neither does an `@` inside a word, as in an address.
+
+A mention counts in two places:
+
+- **The title**, anywhere in it. It holds until the title is edited.
+- **The end of the last comment not written by a loop**: the run of mentions it ends with, with
+  only spaces, commas and closing punctuation after them, as in `... rework it. @Zombo Bot` or
+  `@a, @b`. A mention in the middle of a comment does not count. A comment is a loop's when its
+  status names a model, as `tracker.py` signs every comment a session adds, so a bot's replies
+  never let go of an item. A person's later comment does: unless it ends with a mention too, the
+  item is open to every loop again.
+
+An item mentioning accounts is free only to the loops whose key signs in as one of them. Other loops
+never take it, not even through a session's `NEXT:`, and their `tracker.py queue` lists it as
+`held for <names>`. Any account can be mentioned, a person's too: an item ending with `@ap31` is
+then held for that person, and no loop takes it. An item mentioning no one is open to every loop.
+
+The names come from the server's directory of people, which a tracker mounts as `people` in its
+project (`mount people (source="../../people.os/People", ...)`), as the project template expects.
+A tracker that does not mount it knows only the loop's own account, by its username and display
+name. The directory is read only when some item holds an `@` where a mention would count. The
+`bot-<username>` tags of 0.1.8 mean nothing now.
+
+A loop that sees items held for other accounts writes them, with its own account, into its status. The page then marks its row with `N items for bots not run here` when
+no running loop on this machine, on the same tracker, signs in as any of those accounts. A loop on
+another machine may still run them, so this is a warning and nothing more.
+
 
 ### When the definition changes
 
@@ -317,6 +369,21 @@ folder on the server, as `tracker.py projects` lists them.
 | `overseer` | `{"server": "https://...", "keyFile": "~/.overseer/agents.key"}`, or `null` | `Server`, `KeyFile` |
 | `manager` | an Overseer username (lower case letters, digits, `-`, `_`), or absent or `null`: the loops of this worker take the items whose `owner` it is first, before those flagged `first` | |
 | `signIn` | absent or `null` for the login in its `claude` folder; `{"token": VARIABLE}` for a token made by `claude setup-token`, or `{"apiKey": VARIABLE}` for an API key, billed per use. `VARIABLE` names the environment variable that holds it where agentloop runs. It is never the secret itself | |
+| `limits` | absent or `null` for none, or the share of each usage window its loops may use: `{"five_hour": 0.8, "seven_day": 0.9, "overage": 0}`. A share is 0 to 1, `null` for none, and the page enters it as %. Any window claude's reports name may be given. `overage` is the extra usage past the plan's allowance: reports say whether it is used, never how much, so its one limit is `0`, none of it. See "A worker's limits" below | |
+
+**A worker's limits** (item `h87x`): before each session - and before a triage goes on to its
+build, or a session to another item - the loop checks the worker's last usage report, which every
+loop on the worker keeps (`workers/<name>/usage.json` in the data folder). Past a window's limit, it
+pauses: no session runs, its state is `paused`, and its row and output say which window, how much is
+used and when it resets. A session already running is never ended for it, so one may go a little
+past. The pause ends by itself once the window resets, or once going on past it is approved: the
+page's **Go on past the limit**, on the loop's row or the worker's card
+(`POST /api/workers/<name>/approve-limit`, `{"window": ...}` or `{}` for the first), or
+`agentloop approve-limit <worker> [window]`. An approval is the worker's, kept in
+`workers/<name>/approvals.json`, so every loop on it goes on, and lasts until that window resets;
+then the limit holds again. A stop or a kill ends a pause. The worker's weekly limit takes the place
+of the loop setting `stopAtWeeklyUse`, which stopped a loop at a share of the week and is retired: a
+settings file or a project's definition that still names it loads, and it is ignored.
 
 `claude: null` means no `CLAUDE_CONFIG_DIR` in the session's environment at all, not one naming
 `~/.claude`: given one, `claude` keeps its state inside it and starts as if new (the script's
@@ -416,7 +483,6 @@ One set of keys, wherever they are written:
 | `buildAfterTriage` | `["medium", "high"]` | `$BuildAfterTriage` |
 | `buildInTriageUpTo` | `2` | `$BuildInTriageUpTo` |
 | `trial` | the script's, or `null` for none: `{"until": "2026-10-29", "complexity": "medium", "upTo": 3, "route": {...}}` | `$Trial` |
-| `stopAtWeeklyUse` | `1.0` | `-StopAtWeeklyUse` |
 | `askEveryMinutes` | `30` | `-AskEveryMinutes` |
 | `chainUpTo` | `3` | `-ChainUpTo` |
 | `repeatUpTo` | `2` | `-RepeatUpTo` |
@@ -433,9 +499,11 @@ A route is `{"model": "opus", "effort": "medium"}`.
 
 A run has no limit on how many items it works, and items flagged `asked` never stop it, however
 many there are (item no-limits): it goes on until nothing on its tracker can be worked, or a stop,
-a kill, `stopAtWeeklyUse`, a failed session or an item left at the same stage `repeatUpTo` times ends
-it. The script's `-MaxIterations` and its limit of ten asked items have no setting here. A
-`maxIterations` still written in a settings file or a project's definition is accepted and ignored.
+a kill, a failed session or an item left at the same stage `repeatUpTo` times ends it; a worker's
+limits pause it. The script's `-MaxIterations`, its `-StopAtWeeklyUse` and its limit of ten asked
+items have no setting here: a worker's weekly limit stands for `-StopAtWeeklyUse`. A `maxIterations`
+or `stopAtWeeklyUse` still written in a settings file or a project's definition is accepted and
+ignored.
 
 With `autoStart` on (item auto-start, the Auto button in the loop's row), a loop that finds nothing
 to work does not end: it stays alive, `idle`, and asks the tracker what comes next every

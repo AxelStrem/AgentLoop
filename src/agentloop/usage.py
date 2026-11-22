@@ -1,6 +1,6 @@
-"""Usage limits: waiting them out, asking whether they lifted early, the usage line, the weekly share.
+"""Usage limits: waiting them out, asking whether they lifted early, the usage line, a worker's limits.
 
-The script's side is `Test-UsageBack`, `Write-Usage`, `Test-WeekUsed` and the waiting inside
+The script's side is `Test-UsageBack`, `Write-Usage` and the waiting inside
 `Invoke-Phase` (the limit test, `$until`, `$resumeAt`, the asking every `AskEveryMinutes`, the prompt a
 resumed session is given). These are library functions for item loop, which runs the sessions and
 decides whether to resume or begin afresh (`Find-Transcript`); this reads no settings and no tracker.
@@ -11,15 +11,17 @@ Differences from the script, each deliberate:
   instead of waiting; `Waiting` carries local datetimes for whoever shows them.
 - `wait_out` returns what the wait ended in and the last rate the asking reported, where the script
   sets `$LastRate` and `$Killed` itself.
-- `week_used` returns the message to print (or None), `usage_line` the line (or None), where the
-  script writes them to the host. `usage_line` says nothing when no window is reported, where the
-  script would print an empty list.
+- `usage_line` returns the line (or None), where the script writes it to the host. It says
+  nothing when no window is reported, where the script would print an empty list.
 - A probe that has not answered in `PROBE_TIMEOUT` seconds counts as not back, where the script waits
   for claude as long as it takes.
 - A worker on an API key (item claude-container) has no five-hour or weekly window: it is billed per
   use. Its session counts as stopped by a limit only when a rate report refuses it, never because
   the error's text says "limit" - an API rate limit or a spent balance is a failed session, not an
   hour of waiting - and its usage line says it is billed per use.
+- A worker's own limits (item h87x): `over_limit` says which window of its last report is past
+  the share the worker allows it, so that the loop pauses before its next session. The script has
+  nothing like it; its `Test-WeekUsed`, which stopped the loop at a share of the week, is retired.
 - The probe's command line is a list, never a shell string. Nothing here was tried on macOS or
   Linux: this machine is Windows.
 """
@@ -247,13 +249,74 @@ def per_use_line(account: str) -> str:
     return f"Usage on {account}: billed per use (API key), no 5-hour or weekly limit"
 
 
-def week_used(rate: dict | None, stop_at: float) -> str | None:
-    """The message for stopping between items once `stop_at` of the week is used, or None
-    (`Test-WeekUsed`). Never at 1 or more: then the whole week is the loop's, and the next session
-    meets the weekly limit and waits for it like any other."""
-    if stop_at >= 1:
+# A worker's own limits (item h87x)
+
+# How the page and the log name a window; any other is named by its key.
+WINDOW_NAMES = {"five_hour": "5-hour", "seven_day": "weekly", "overage": "extra usage"}
+# The extra usage: reports say whether it is used, never how much, so its one limit is 0, none.
+OVERAGE = "overage"
+# How long an approval lasts for a window whose report names no reset.
+APPROVAL_FALLBACK = 5 * 3600
+
+
+def window_name(key: str) -> str:
+    return WINDOW_NAMES.get(key, key.replace("_", " "))
+
+
+@dataclass
+class Over:
+    """A window past the worker's limit for it: its key, the share used (None for the extra usage,
+    which is not reported as a share), the limit, and when it resets (None if not said)."""
+
+    window: str
+    used: float | None
+    limit: float
+    resets: float | None
+
+    def line(self, worker: str) -> str:
+        if self.window == OVERAGE:
+            what = f"Paused: worker {worker} is using extra usage, which it allows none of"
+        else:
+            what = (f"Paused: worker {worker} is at {round(self.used * 100)}% of its {window_name(self.window)} allowance "
+                    f"(its limit {round(self.limit * 100)}%)")
+        until = f", until it resets {local(self.resets):%a %H:%M}" if self.resets else ""
+        return (f"{what}{until}, or until going on past it is approved - on the page, or with "
+                f"agentloop approve-limit {worker} {self.window}.")
+
+    def until(self, now: float) -> float:
+        """When an approval of it given now lapses: when the window resets."""
+        return self.resets if self.resets and self.resets > now else now + APPROVAL_FALLBACK
+
+
+def over_limit(rate: dict | None, limits: dict | None, approved: dict | None, now: float) -> Over | None:
+    """The first window of the worker's last report that is at or past its limit and not approved,
+    or None. A window whose reset has passed is not counted: the report is older than the window.
+    `approved` maps a window to when its approval lapses."""
+    if not rate or not limits:
         return None
-    weekly = (((rate or {}).get("unifiedWindows") or {}).get("seven_day") or {}).get("utilization")
-    if weekly is not None and float(weekly) >= stop_at:
-        return f"The weekly allowance is {round(float(weekly) * 100)}% used (limit {round(stop_at * 100)}%). Stopping."
+    approved = approved or {}
+    windows = rate.get("unifiedWindows") or {}
+    for key, limit in limits.items():
+        if limit is None:
+            continue
+        a = _number(approved.get(key))
+        if a is not None and now < a:
+            continue
+        if key == OVERAGE:
+            if rate.get("isUsingOverage") is True and float(limit) <= 0:
+                # The extra usage is spent once a window ran out; it ends when that window resets.
+                resets = _number(rate.get("resetsAt")) or _number(rate.get("overageResetsAt"))
+                if resets is not None and resets <= now:
+                    continue
+                return Over(key, None, float(limit), resets)
+            continue
+        w = windows.get(key)
+        if not isinstance(w, dict):
+            continue
+        used = _number(w.get("utilization"))
+        resets = _number(w.get("resetsAt"))
+        if used is None or (resets is not None and resets <= now):
+            continue
+        if used >= float(limit):
+            return Over(key, used, float(limit), resets)
     return None

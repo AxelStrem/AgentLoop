@@ -57,7 +57,7 @@ def machine(tmp_path, monkeypatch, overseer):
     loop on `proj` names: two git repositories and a place."""
     monkeypatch.setenv("AGENTLOOP_HOME", str(tmp_path / "home"))
     config.save_json(config.paths().settings, {
-        "format": 1, "bundles": [],
+        "format": 1,
         "workers": [{"name": "w", "claude": None, "overseer": overseer.worker},
                     {"name": "bare", "claude": None, "overseer": None}],
         "loops": [], "defaults": {},
@@ -159,7 +159,7 @@ def test_an_unreachable_server_is_said_without_its_address(machine, overseer):
 
 
 def test_a_copy_inherits_the_loops_own_server(tmp_path):
-    raw = {"format": 1, "bundles": [], "workers": [{"name": "w", "claude": None, "overseer": None}],
+    raw = {"format": 1, "workers": [{"name": "w", "claude": None, "overseer": None}],
            "loops": [{"name": "one", "tracker": "a/proj.os", "worker": "w", "overseer": {"server": "http://s", "keyFile": "k"}},
                      {"name": "two", "like": "one"}]}
     settings = config.parse_settings(raw, tmp_path / "settings.json")
@@ -200,7 +200,7 @@ def test_the_routes_read_and_add(machine, overseer, serve):
     form["repos"]["docs"] = str(machine.docs)
     form["places"]["samples"] = str(machine.samples)
     added = c.json("POST", "/api/loops/from-tracker", form)
-    assert added["name"] == "proj" and added["source"] == "tracker" and added["server"] is None
+    assert added["name"] == "proj" and added["server"] is None
     assert added["definition"] == {"repos": ["code", "docs"], "places": ["samples"]}
     assert added["missing"] == []
 

@@ -132,15 +132,10 @@ def home(tmp_path, monkeypatch, overseer):
             monkeypatch.delenv(name)
     code = make_repo(tmp_path / "code", {"README.md": "code\n"})
     tracker = overseer.document(tracker_text(item("alpha", "ready", complexity="low")))
-    bundle = tmp_path / "home" / "config" / "bundles" / "proj"
-    bundle.mkdir(parents=True)
-    (bundle / "brief.md").write_text("# The brief\n", encoding="utf-8")
-    config.save_json(bundle / "project.json", {"format": 1, "name": "proj", "tracker": {"server": tracker},
-                                               "repos": ["code"], "settings": {}})
     config.save_json(tmp_path / "home" / "config" / "settings.json", {
-        "format": 1, "bundles": [str(bundle)],
+        "format": 1,
         "workers": [{"name": "w", "claude": None, "overseer": overseer.worker}],
-        "loops": [{"name": "proj", "project": "proj", "worker": "w", "repos": {"code": str(code)}, "settings": {}}],
+        "loops": [{"name": "proj", "tracker": tracker, "worker": "w", "repos": {"code": str(code)}, "settings": {}}],
         "defaults": {},
     })
     make_logs(config.paths().data / "logs" / "proj")

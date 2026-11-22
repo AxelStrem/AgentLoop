@@ -1,6 +1,8 @@
-"""A bundle written out as what goes on the server beside its tracker (item def-export): the
-definition document `<name>.project.os` and its tools, so a project moves from its bundle to its
-tracker without anyone writing the document by hand.
+"""A project written out as what goes on the server beside its tracker (item def-export): the
+definition document `<name>.project.os` and its tools, so a project of the script's moves to its
+tracker without anyone writing the document by hand. `import-psd1` gives it a `.psd1`, its brief and
+its tools folder (`psd1.py`); local bundles, which it was first written for, are gone (item
+drop-bundle-source).
 
 What is written mirrors the server's own folder, the one the tracker sits in:
 
@@ -179,6 +181,25 @@ def definition_text(description: str, repos: list[tuple[str, str]], places: list
 
 
 @dataclass
+class Source:
+    """What an export is written from: a project as it was kept before it had a definition."""
+
+    name: str
+    # The tracker's name on the server.
+    tracker: str
+    repos: list[str]
+    places: list[str] = field(default_factory=list)
+    # What each repository and place is, by its name, where something says so beside the brief.
+    about: dict[str, str] = field(default_factory=dict)
+    systems: list[str] | None = None
+    settings: dict = field(default_factory=dict)
+    # The brief's text; empty for none.
+    brief: str = ""
+    # The folder holding the project's tools; None for none.
+    tools: Path | None = None
+
+
+@dataclass
 class Report:
     name: str
     tracker: str
@@ -274,16 +295,13 @@ def tracker_description(server: str, key_file: Path, tracker: str, timeout: floa
     return value
 
 
-def export(bundle: Path, out: Path, description: str) -> Report:
-    """Writes the bundle's definition and tools under `out`, which must be empty or missing, and
+def export(project: Source, out: Path, description: str) -> Report:
+    """Writes the project's definition and tools under `out`, which must be empty or missing, and
     says what is left to do. `description` is the tracker's own."""
-    project = config.load_bundle(bundle)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise config.ConfigError(str(out), "out", "is not an empty folder; nothing is written over")
     names = project.repos + project.places
-    brief_path = project.brief
-    brief_text = brief_path.read_text(encoding="utf-8") if brief_path.is_file() else ""
-    brief = split_brief(brief_text, names)
+    brief = split_brief(project.brief, names)
     about = {**project.about, **brief.about}
     parts = [p for p in (description.strip(), brief.text.strip()) if p]
     tools_src = project.tools
@@ -308,6 +326,6 @@ def export(bundle: Path, out: Path, description: str) -> Report:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(tools_src / path, dest)
     return Report(
-        name=project.name, tracker=project.tracker.server, definition=target, tools=files, tools_dir=tools_dir,
+        name=project.name, tracker=project.tracker, definition=target, tools=files, tools_dir=tools_dir,
         override=f'- definition (source="{project.name}.project.os/definition", lazy=false)',
         no_about=[n for n in names if not about.get(n)], brief=brief)

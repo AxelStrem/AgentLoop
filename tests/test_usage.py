@@ -31,7 +31,7 @@ def _run(tmp_path: Path, scenario: str, fake_claude) -> SessionResult:
     spec = SessionSpec(
         claude=session.find_claude(), session_id="11111111-2222-3333-4444-555555555555", resume=False,
         prompt="Work the item.", route=Route("sonnet", "high"), workdir=work,
-        system_file=session.write_system_file(data / "system.md", "guide", "about", "brief"),
+        system_file=session.write_system_file(data / "system.md", "guide", "about"),
         settings=session.write_session_settings(data / "loop-settings.json"),
         log=data / "loop-1-build.jsonl",
         variables=session.session_variables(author="a", scratch=data / "s", tracker="x/y.os", item="p:thing"),
@@ -223,8 +223,6 @@ def test_an_api_key_is_limited_only_by_a_refusing_report():
     assert not usage.limited(SessionResult(), per_use=True)
     assert usage.limited(SessionResult(rate={"status": "rejected"}), per_use=True)
     assert usage.per_use_line(".claude-x") == "Usage on .claude-x: billed per use (API key), no 5-hour or weekly limit"
-    # With nothing reported, the weekly share never stops it.
-    assert usage.week_used(None, 0.5) is None
 
 
 def test_usage_line_nothing_reported():
@@ -242,11 +240,42 @@ def test_account_name():
     assert usage.account_name("C:/Users/someone/.claude-account1") == ".claude-account1"
 
 
-def test_week_used():
-    rate = {"unifiedWindows": {"seven_day": {"utilization": 0.81}}}
-    assert usage.week_used(rate, 0.8) == "The weekly allowance is 81% used (limit 80%). Stopping."
-    assert usage.week_used(rate, 0.9) is None
-    # At 1 the whole week is the loop's, however much is used.
-    assert usage.week_used({"unifiedWindows": {"seven_day": {"utilization": 1}}}, 1.0) is None
-    assert usage.week_used(None, 0.5) is None
-    assert usage.week_used({"unifiedWindows": {"five_hour": {"utilization": 1}}}, 0.5) is None
+
+
+# A worker's own limits (item h87x)
+
+def test_over_limit():
+    now = 1000.0
+    rate = {"unifiedWindows": {"five_hour": {"utilization": 0.82, "resetsAt": now + 600},
+                               "seven_day": {"utilization": 0.5, "resetsAt": now + 9000}}}
+    over = usage.over_limit(rate, {"five_hour": 0.8, "seven_day": 0.9}, {}, now)
+    assert (over.window, over.used, over.limit, over.resets) == ("five_hour", 0.82, 0.8, now + 600)
+    assert over.line("w").startswith("Paused: worker w is at 82% of its 5-hour allowance (its limit 80%), until it resets ")
+    assert "agentloop approve-limit w five_hour" in over.line("w")
+    # At the limit is past it; under it, or with no limit for the window, is not.
+    assert usage.over_limit(rate, {"five_hour": 0.82}, {}, now).window == "five_hour"
+    assert usage.over_limit(rate, {"five_hour": 0.9, "seven_day": 0.9}, {}, now) is None
+    assert usage.over_limit(rate, {"five_hour": None, "seven_day": 0.5}, {}, now).window == "seven_day"
+    assert usage.over_limit(rate, None, {}, now) is None and usage.over_limit(None, {"five_hour": 0.1}, {}, now) is None
+    # A window claude does not report today is checked once a report names it.
+    assert usage.over_limit(rate, {"seven_day_sonnet": 0.1}, {}, now) is None
+    rate["unifiedWindows"]["seven_day_sonnet"] = {"utilization": 0.2, "resetsAt": now + 9000}
+    assert usage.over_limit(rate, {"seven_day_sonnet": 0.1}, {}, now).line("w").startswith(
+        "Paused: worker w is at 20% of its seven day sonnet allowance")
+    # Approved until a time: past it again after that.
+    assert usage.over_limit(rate, {"five_hour": 0.8}, {"five_hour": now + 600}, now) is None
+    assert usage.over_limit(rate, {"five_hour": 0.8}, {"five_hour": now - 1}, now).window == "five_hour"
+    # A window that has reset since the report is not counted: the report is older than it.
+    assert usage.over_limit(rate, {"five_hour": 0.8}, {}, now + 601) is None
+    assert over.until(now) == now + 600
+    assert usage.Over("x", 0.5, 0.1, None).until(now) == now + usage.APPROVAL_FALLBACK
+
+
+def test_over_limit_on_extra_usage():
+    now = 1000.0
+    rate = {"resetsAt": now + 600, "overageResetsAt": now + 90000, "isUsingOverage": True, "unifiedWindows": {}}
+    over = usage.over_limit(rate, {"overage": 0}, {}, now)
+    assert (over.window, over.used, over.resets) == ("overage", None, now + 600)
+    assert over.line("w").startswith("Paused: worker w is using extra usage, which it allows none of, until it resets ")
+    assert usage.over_limit({**rate, "isUsingOverage": False}, {"overage": 0}, {}, now) is None
+    assert usage.over_limit(rate, {"overage": 0}, {}, now + 601) is None
