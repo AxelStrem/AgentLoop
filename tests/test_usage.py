@@ -245,7 +245,8 @@ def test_account_name():
 # A worker's own limits (item h87x)
 
 def test_over_limit():
-    now = 1000.0
+    # A real moment: Windows cannot give the local time of one just after 1970 east of UTC.
+    now = 1_800_000_000.0
     rate = {"unifiedWindows": {"five_hour": {"utilization": 0.82, "resetsAt": now + 600},
                                "seven_day": {"utilization": 0.5, "resetsAt": now + 9000}}}
     over = usage.over_limit(rate, {"five_hour": 0.8, "seven_day": 0.9}, {}, now)
@@ -272,7 +273,8 @@ def test_over_limit():
 
 
 def test_over_limit_on_extra_usage():
-    now = 1000.0
+    # A real moment: Windows cannot give the local time of one just after 1970 east of UTC.
+    now = 1_800_000_000.0
     rate = {"resetsAt": now + 600, "overageResetsAt": now + 90000, "isUsingOverage": True, "unifiedWindows": {}}
     over = usage.over_limit(rate, {"overage": 0}, {}, now)
     assert (over.window, over.used, over.resets) == ("overage", None, now + 600)
