@@ -228,9 +228,6 @@ ROUTES = [
     ("POST", r"/api/output", "output"),
     ("GET", r"/api/settings", "get_settings"),
     ("PUT", r"/api/settings", "put_settings"),
-    ("GET", r"/api/bundles", "bundles"),
-    ("GET", r"/api/bundles/([^/]+)", "get_bundle"),
-    ("PUT", r"/api/bundles/([^/]+)", "put_bundle"),
     ("GET", r"/api/accounts", "get_accounts"),
     ("POST", r"/api/accounts", "add_account"),
     ("POST", r"/api/accounts/default", "default_account"),
@@ -478,13 +475,6 @@ class Handler(BaseHTTPRequestHandler):
             settings = config.load_settings(path)
             raw = json.loads(json.dumps(settings.raw))
             change(raw)
-            # A loop names a bundle the settings list: load_machine's check, on settings not yet
-            # written.
-            checked = config.parse_settings(raw, path)
-            names = {config.load_bundle(folder).name for folder in checked.bundles}
-            for index, found in enumerate(checked.loops):
-                if found.tracker is None and found.project not in names:
-                    raise config.ConfigError(path.name, f"loops[{index}].project", f'no bundle named "{found.project}" in bundles')
             return config.save_settings(raw, path)
 
     # Loops
@@ -494,13 +484,13 @@ class Handler(BaseHTTPRequestHandler):
         # server, and the loop reads it again when it starts (item doc-read).
         folder = loop_mod.loop_dir(found.project, found.name)
         loaded = definition.project_for(machine, found, folder, read=False)
-        bundle = loaded.project
+        project = loaded.project
         status = self.server.runner.status(found.name)
         # A change to the definition, to show: waiting to be accepted, or used at once and not yet
         # dismissed (item doc-change). What it places is asked for before it is accepted.
-        changed = definition.change(folder, found.tracker) if found.tracker else None
-        waiting = definition.pending(folder, found.tracker) if found.tracker and changed and changed["pending"] else None
-        placing = definition.project(found.tracker, waiting["definition"]) if waiting else bundle
+        changed = definition.change(folder, found.tracker)
+        waiting = definition.pending(folder, found.tracker) if changed and changed["pending"] else None
+        placing = definition.project(found.tracker, waiting["definition"]) if waiting else project
         return {
             "name": found.name,
             "project": found.project,
@@ -509,36 +499,34 @@ class Handler(BaseHTTPRequestHandler):
             "repos": found.repos,
             "places": found.places,
             "settings": found.settings,
-            "effective": config.loop_settings(machine, found, bundle),
-            "tracker": {"server": found.tracker} if found.tracker else dataclasses.asdict(bundle.tracker),
+            "effective": config.loop_settings(machine, found, project),
+            "tracker": {"server": found.tracker},
             # The host of the server the loop reaches its tracker on, when it is its own and not
             # its worker's (item loop-from-url); null for the worker's.
             "server": urlsplit(str(found.overseer["server"])).netloc or str(found.overseer["server"]) if found.overseer else None,
-            # "tracker" for a project read from its tracker, "bundle" for one on a local bundle.
-            "source": "tracker" if found.tracker else "bundle",
             "definitionRead": loaded.read_at,
-            "about": bundle.about if bundle else {},
-            # What a loop on a tracker places, as its definition last read names them; null
-            # before it has read one.
-            "definition": {"repos": placing.repos, "places": placing.places} if found.tracker and placing else None,
+            "about": project.about if project else {},
+            # What the loop places, as its definition last read names them; null before it has
+            # read one.
+            "definition": {"repos": placing.repos, "places": placing.places} if placing else None,
             "definitionChange": changed,
             "acceptDefinition": config.accept_mode(machine, found),
             # The project's setup script, as the accepted definition names it for this system, and
             # how its last run went (item project-setup).
-            "setup": setup.state(found.project, config.setup_tool(bundle.raw) if found.tracker and bundle else None,
+            "setup": setup.state(found.project, config.setup_tool(project.raw) if project else None,
                                  config.setup_mode(machine, found)),
             "status": status.as_dict(),
             "missing": self._missing(machine, found, placing),
         }
 
-    def _missing(self, machine: config.Machine, found: config.Loop, bundle: config.Project | None) -> list[dict]:
+    def _missing(self, machine: config.Machine, found: config.Loop, project: config.Project | None) -> list[dict]:
         """What keeps the loop from starting, each with its field, judged as the loop judges it
         (config.place_repos), for the page to ask for before it starts it. A loop on a tracker
         that has not read its definition yet is judged on its worker alone."""
         problems: list[config.ConfigError] = []
-        if bundle is not None:
+        if project is not None:
             try:
-                config.check_system(bundle)
+                config.check_system(project)
             except config.ConfigError as error:
                 problems.append(error)
         worker = machine.settings.worker(found.worker)
@@ -552,10 +540,10 @@ class Handler(BaseHTTPRequestHandler):
             # As loop.Run refuses it; the key file is looked for, never read.
             problems.append(config.ConfigError(f'loop "{found.name}"', "worker",
                                                f"{found.project}'s tracker is on a server, and {worker.name} names no file holding the agents' key"))
-        if bundle is None:
+        if project is None:
             return [{"field": p.field, "message": p.message} for p in problems]
         try:
-            problems += config.missing(found, bundle, runner.remembered_top)
+            problems += config.missing(found, project, runner.remembered_top)
         except config.ConfigError as error:
             problems.append(error)
         return [{"field": p.field, "message": p.message} for p in problems]
@@ -728,8 +716,6 @@ class Handler(BaseHTTPRequestHandler):
         the files and goes on, so nothing is asked of it here."""
         self._body()
         _, found = self._machine_loop(name)
-        if found.tracker is None:
-            raise Refused(HTTPStatus.BAD_REQUEST, f"{name} runs on a local bundle, not on a definition.")
         definition.accept(loop_mod.loop_dir(found.project, found.name), found.tracker)
         self.route_get_loop(name)
 
@@ -740,7 +726,7 @@ class Handler(BaseHTTPRequestHandler):
         self._body()
         machine, found = self._machine_loop(name)
         loaded = definition.project_for(machine, found, loop_mod.loop_dir(found.project, found.name), read=False)
-        if not found.tracker or loaded.project is None or config.setup_tool(loaded.project.raw) is None:
+        if loaded.project is None or config.setup_tool(loaded.project.raw) is None:
             raise Refused(HTTPStatus.BAD_REQUEST, f"{found.project}'s definition names no setup script for this system.")
         if config.setup_mode(machine, found) == "off":
             raise Refused(HTTPStatus.BAD_REQUEST, f"{name} has setup off; set it to auto in the loop's settings first.")
@@ -789,7 +775,7 @@ class Handler(BaseHTTPRequestHandler):
         return {"text": text, "reset": reset, "id": None if file_id is None else f"{file_id}:{offset_after}",
                 "status": self.server.runner.status(name).as_dict()}
 
-    # Settings and bundles
+    # Settings
 
     def route_get_settings(self) -> None:
         path = config.paths().settings
@@ -810,37 +796,6 @@ class Handler(BaseHTTPRequestHandler):
 
         settings = self._change_settings(change, body["version"])
         self._json({"version": version(settings.path), "settings": settings.raw})
-
-    def _bundle_folder(self, name: str) -> Path:
-        for folder in config.load_settings().bundles:
-            path = config.expand(folder)
-            if path.name == name:
-                return path
-        raise Refused(HTTPStatus.NOT_FOUND, f"No bundle named {name}.")
-
-    def route_bundles(self) -> None:
-        machine = config.load_machine()
-        self._json({"bundles": [{"name": b.name, "folder": str(b.folder), "tracker": dataclasses.asdict(b.tracker),
-                                 "repos": b.repo_names(), "places": b.places, "systems": b.systems}
-                                for b in machine.bundles.values()]})
-
-    def route_get_bundle(self, name: str) -> None:
-        folder = self._bundle_folder(name)
-        bundle = config.load_bundle(folder)
-        self._json({"version": version(folder / "project.json"), "bundle": bundle.raw})
-
-    def route_put_bundle(self, name: str) -> None:
-        body = self._body()
-        new = body.get("bundle")
-        if not isinstance(new, dict) or not isinstance(body.get("version"), str):
-            raise Refused(HTTPStatus.BAD_REQUEST, 'Send {"version": ..., "bundle": {...}}.')
-        folder = self._bundle_folder(name)
-        with self.server.settings_lock:
-            if body["version"] != version(folder / "project.json"):
-                raise Refused(HTTPStatus.CONFLICT, "The bundle was changed since it was read; read it again.",
-                              version=version(folder / "project.json"))
-            bundle = config.save_bundle(folder, new)
-        self._json({"version": version(folder / "project.json"), "bundle": bundle.raw})
 
     # Accounts
 

@@ -221,15 +221,15 @@ def busy(found: config.Loop) -> str | None:
         return None
     # The project as last read: a check before a start never waits on the server.
     try:
-        bundle = definition.project_for(machine, found, loop_mod.loop_dir(found.project, found.name), read=False).project
+        project = definition.project_for(machine, found, loop_mod.loop_dir(found.project, found.name), read=False).project
     except config.ConfigError:
         return None
-    if bundle is None:
+    if project is None:
         return None
-    mine = set(config.tops(found, bundle, remembered_top))
+    mine = set(config.tops(found, project, remembered_top))
     for name in others:
         other = machine.settings.loop(name)
-        if other is not None and mine & set(config.tops(other, bundle, remembered_top)):
+        if other is not None and mine & set(config.tops(other, project, remembered_top)):
             return f"{name} is running in a repository it shares with this one"
     return None
 

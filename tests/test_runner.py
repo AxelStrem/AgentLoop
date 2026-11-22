@@ -12,13 +12,13 @@ import pytest
 
 from agentloop import cli, config, runner
 
-from test_loop import git, item, make_repo, tracker_text
+from test_loop import git, item, make_repo, served
 
 
 
 class Machine:
     """A PC with two loops, a and b, each on a project of its own with a code repository, its tracker
-    on the test's server, and a bundle. The projects' names are the test's own: on Windows
+    on the test's server with its definition beside it. The projects' names are the test's own: on Windows
     a loop also takes the script's mutex, which is named after the project and seen machine-wide, so
     two test runs at once - or a script's loop on a project named a - would meet there."""
 
@@ -34,22 +34,16 @@ class Machine:
         self.code: dict[str, Path] = {}
         self.tracker: dict[str, str] = {}
         folder = overseer.folder()
-        bundles, loops = [], []
+        loops = []
         for name, handles in (("a", ["alpha", "beta"]), ("b", ["gamma"])):
             project = self.project[name]
             self.code[name] = make_repo(tmp_path / name / "code", {"README.md": "code\n"})
-            self.tracker[name] = overseer.document(tracker_text(*(item(h, "ready", complexity="low") for h in handles)),
-                                                   project=name, folder=folder)
-            bundle = home / "config" / "bundles" / project
-            bundle.mkdir(parents=True)
-            (bundle / "brief.md").write_text("# The brief\n", encoding="utf-8")
-            config.save_json(bundle / "project.json", {"format": 1, "name": project, "tracker": {"server": self.tracker[name]},
-                                                       "repos": ["code"], "settings": {}})
-            bundles.append(str(bundle))
-            loops.append({"name": name, "project": project, "worker": "w",
+            self.tracker[name] = served(overseer, *(item(h, "ready", complexity="low") for h in handles),
+                                        name=project, folder=folder)
+            loops.append({"name": name, "tracker": self.tracker[name], "worker": "w",
                           "repos": {"code": str(self.code[name])}, "settings": {"trial": None}})
         config.save_json(home / "config" / "settings.json", {
-            "format": 1, "bundles": bundles, "workers": [{"name": "w", "claude": str(account), "overseer": overseer.worker}],
+            "format": 1, "workers": [{"name": "w", "claude": str(account), "overseer": overseer.worker}],
             "loops": loops, "defaults": {},
         })
         self.runner = runner.Runner()

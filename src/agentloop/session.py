@@ -15,7 +15,7 @@ Differences from the script, each deliberate:
   \\r\\n on Windows. Either is JSON lines.
 - The resume command is written for the OS it is shown on: PowerShell's on Windows, as the script
   writes it, and sh's on macOS and Linux (untried here: this machine is Windows).
-- system.md says where the session is - the OS, its shell, the Python, the tools, the bundle and
+- system.md says where the session is - the OS, its shell, the Python, the tools, the project's tools and
   each repository's and place's folder - and fills those in where AUTOTASK.md and the brief write
   `{name}`; AUTOTASK.md's Windows part goes in only on Windows (item neutral). The script's
   AUTOTASK.md and briefs name this PC's paths outright.
@@ -132,26 +132,27 @@ def python_command() -> str:
     return f'"{python}"' if " " in python else python
 
 
-def placeholders(bundle: Path | None, folders: dict[str, Path], places: dict[str, Path]) -> dict[str, str]:
+def placeholders(files: Path | None, folders: dict[str, Path], places: dict[str, Path]) -> dict[str, str]:
     """What each `{name}` stands for on this machine, with forward slashes, which every program and
-    shell reads. A project read from its tracker has no bundle folder, so no `{bundle}`."""
+    shell reads. `files` is the folder the project's tools were fetched into - `{bundle}`, as a
+    project's own folder was named once - or None when it lists none for this system."""
     values = {name: _slashes(folder.resolve()) for name, folder in {**folders, **places}.items()}
     values.update(tools=_slashes(tools.path("tracker.py").parent), python=python_command())
-    if bundle is not None:
-        values["bundle"] = _slashes(bundle.resolve())
+    if files is not None:
+        values["bundle"] = _slashes(files.resolve())
     return values
 
 
-def where_you_are(bundle: Path | None, folders: dict[str, Path], places: dict[str, Path],
-                  about: dict[str, str] | None = None, fetched: bool = False, project_env: Path | None = None,
+def where_you_are(files: Path | None, folders: dict[str, Path], places: dict[str, Path],
+                  about: dict[str, str] | None = None, project_env: Path | None = None,
                   brewfile: Path | None = None) -> str:
     """The section of system.md that tells a session the machine it is on, the same for every
     session of a run. `about` is what the project says each repository and place is, beside its
-    folder where it says it. `fetched` when `bundle` is the folder a tracker's project had its
-    tools fetched into (item tools-fetch), not a bundle. `project_env` is the folder the project's
+    folder where it says it. `files` is the folder the project had its tools fetched into from its
+    tracker (item tools-fetch), when it has any. `project_env` is the folder the project's
     setup script installed its tools in (item project-setup), when it ran. `brewfile` is the
     project's Brewfile, on a machine that has Homebrew on for its sessions (item brew-tools)."""
-    values = placeholders(bundle, folders, places)
+    values = placeholders(files, folders, places)
     about = about or {}
     here = config.this_system()
     system = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}[here]
@@ -172,9 +173,8 @@ def where_you_are(bundle: Path | None, folders: dict[str, Path], places: dict[st
         f"- **System:** {system}; {shell}.",
         f"- **Python:** `{values['python']}` - run the tools with it.",
         f"- **The app's tools** (`tools`): `{values['tools']}`, where `tracker.py` is.",
-        *([f"- **The project's tools** (`bundle`): `{values['bundle']}`, its tools in `tools/`, fetched from its tracker."
-           if fetched else f"- **The project's bundle** (`bundle`): `{values['bundle']}`, its own tools in `tools/`."]
-          if bundle is not None else []),
+        *([f"- **The project's tools** (`bundle`): `{values['bundle']}`, its tools in `tools/`, fetched from its tracker."]
+          if files is not None else []),
         *([f"- **The project's own tools,** installed by its setup script: `{_slashes(project_env)}`. What it put in "
             f"front of PATH, and the variables it set, are in this session's environment already; `{_slashes(project_env)}/"
             "session-env.txt` lists them."] if project_env is not None else []),
@@ -191,30 +191,23 @@ def where_you_are(bundle: Path | None, folders: dict[str, Path], places: dict[st
     return "\n".join(lines) + "\n"
 
 
-def write_system_file(dest: Path, autotask: str, described: str, brief: str | None = None, *, where: str = "",
+def write_system_file(dest: Path, autotask: str, described: str, *, where: str = "",
                       values: dict[str, str] | None = None) -> Path:
     """AUTOTASK.md, then what the project is, with where the session is after AUTOTASK.md, and this
     machine's folders filled in where AUTOTASK.md and the project's text name them. Given to every
     session as part of its system prompt, so sessions of a project share that start in the prompt
     cache; written once a run, so the whole run works to one version of it.
 
-    For a project on a bundle, `described` is its tracker's own description, from `tracker.py
-    about`, and `brief` its brief.md, joined as the script joins them into system.md. For a project
-    read from its tracker, `brief` is None and `described` is the definition's one description,
-    under `# What the project is` - not the script's: it has no definitions (item doc-read)."""
+    `described` is the definition's one description, under `# What the project is` - not the
+    script's, which joins its tracker's description and a brief.md: it has no definitions (item
+    doc-read)."""
     values = values or {}
     text = fill(autotask, values) + "\n\n---\n\n"
     if where:
         text += where + "\n---\n\n"
-    if brief is None:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes((text + fill(f"# What the project is\n\n{described.strip()}\n", values)).encode("utf-8"))
-        return dest
-    if described.strip():
-        text += f"# What the project is, as its tracker describes it\n\n{described.strip()}\n\n---\n\n"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # UTF-8 without a BOM, and the line ends as the files had them, as WriteAllText leaves them.
-    dest.write_bytes((text + fill(brief, values)).encode("utf-8"))
+    # UTF-8 without a BOM.
+    dest.write_bytes((text + fill(f"# What the project is\n\n{described.strip()}\n", values)).encode("utf-8"))
     return dest
 
 

@@ -337,7 +337,7 @@ def test_a_run_offline_uses_the_tools_fetched_and_refuses_a_missing_one(tmp_path
     p.run()
     p.point_at(closed_port())
     r = p.run()
-    assert "starts from the copy" in r.definition_note and r.bundle.tools == r.loop_dir / definition.FILES / "tools"
+    assert "starts from the copy" in r.definition_note and r.project_def.tools == r.loop_dir / definition.FILES / "tools"
     (r.loop_dir / definition.FILES / "tools" / "probe.py").unlink()
     with pytest.raises(loop.LoopError) as caught:
         p.run()

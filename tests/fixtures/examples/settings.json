@@ -1,9 +1,5 @@
 {
   "format": 1,
-  "bundles": [
-    "~/src/bundles/quill",
-    "~/AppData/Roaming/agentloop/bundles/orchard"
-  ],
   "workers": [
     {
       "name": "account1",
@@ -25,15 +21,21 @@
   "loops": [
     {
       "name": "quill",
-      "project": "quill",
+      "tracker": "alice/projects/quill.os",
       "worker": "account1",
-      "repos": {"quill": "~/src/Quill"},
-      "places": {"press": "C:/Program Files/Press"},
-      "settings": {"chainUpTo": 2}
+      "repos": {
+        "quill": "~/src/Quill"
+      },
+      "places": {
+        "press": "C:/Program Files/Press"
+      },
+      "settings": {
+        "chainUpTo": 2
+      }
     },
     {
       "name": "orchard",
-      "project": "orchard",
+      "tracker": "alice/projects/orchard.os",
       "worker": "account2",
       "repos": {
         "orchard": "~/src/Orchard",
@@ -43,7 +45,12 @@
       "settings": {}
     }
   ],
-  "defaults": {"askEveryMinutes": 60},
+  "defaults": {
+    "askEveryMinutes": 60
+  },
   "install": null,
-  "server": {"host": "127.0.0.1", "port": 8765}
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765
+  }
 }

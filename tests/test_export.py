@@ -1,9 +1,10 @@
-"""A bundle written out as its definition document and tools (item def-export): the brief split
+"""A project written out as its definition document and tools (item def-export): the brief split
 into the description and each folder's line, the document read back through a served tracker as
-the bundle it came from, and the command a person runs. Every project here is made up."""
+the project it came from, and the command a person runs on a .psd1 (item drop-bundle-source).
+Every project here is made up."""
 
 import hashlib
-import json
+import socket
 from pathlib import Path
 
 import pytest
@@ -33,21 +34,21 @@ PROBE = b"print('probe')\n"
 LOOK = b"Write-Output 'look'\r\n"
 
 
-def make_bundle(root: Path, tracker: str = "alice/projects/kiln.os", brief: str = BRIEF,
-                settings: dict | None = None) -> Path:
-    folder = root / "kiln"
-    (folder / "tools" / "sub").mkdir(parents=True)
-    (folder / "tools" / "__pycache__").mkdir()
-    (folder / "project.json").write_text(json.dumps({
-        "format": 1, "name": "kiln", "tracker": {"server": tracker},
-        "repos": ["kiln", "notes"], "places": ["engine"], "systems": ["windows", "linux"],
-        "settings": settings if settings is not None else {"chainUpTo": 2},
-    }), encoding="utf-8")
-    (folder / "brief.md").write_text(brief, encoding="utf-8", newline="\n")
-    (folder / "tools" / "probe.py").write_bytes(PROBE)
-    (folder / "tools" / "sub" / "look.ps1").write_bytes(LOOK)
-    (folder / "tools" / "__pycache__" / "probe.cpython-314.pyc").write_bytes(b"\0")
+def make_tools(folder: Path) -> Path:
+    """A tools folder: two tools, one in a folder of its own, and what Python leaves beside them."""
+    (folder / "sub").mkdir(parents=True)
+    (folder / "__pycache__").mkdir()
+    (folder / "probe.py").write_bytes(PROBE)
+    (folder / "sub" / "look.ps1").write_bytes(LOOK)
+    (folder / "__pycache__" / "probe.cpython-314.pyc").write_bytes(b"\0")
     return folder
+
+
+def make_source(root: Path, tracker: str = "alice/projects/kiln.os", brief: str = BRIEF,
+                settings: dict | None = None) -> export.Source:
+    return export.Source(name="kiln", tracker=tracker, repos=["kiln", "notes"], places=["engine"],
+                         systems=["windows", "linux"], settings=settings if settings is not None else {"chainUpTo": 2},
+                         brief=brief, tools=make_tools(root / "kiln"))
 
 
 # The brief
@@ -89,7 +90,7 @@ def test_a_brief_with_neither_is_left_whole():
 
 def test_the_definition_and_the_tools_are_written(tmp_path):
     out = tmp_path / "out"
-    report = export.export(make_bundle(tmp_path), out, "Kiln fires pots.")
+    report = export.export(make_source(tmp_path), out, "Kiln fires pots.")
     assert report.definition == out / "kiln.project.os"
     assert report.tools == ["probe.py", "sub/look.ps1"]
     assert (out / "tools" / "kiln.project" / "probe.py").read_bytes() == PROBE
@@ -116,43 +117,34 @@ def test_an_unempty_folder_is_refused(tmp_path):
     out.mkdir()
     (out / "kiln.project.os").write_text("mine", encoding="utf-8")
     with pytest.raises(config.ConfigError) as caught:
-        export.export(make_bundle(tmp_path), out, "")
+        export.export(make_source(tmp_path), out, "")
     assert "not an empty folder" in caught.value.message
     assert (out / "kiln.project.os").read_text(encoding="utf-8") == "mine"
 
 
-def test_a_bad_bundle_is_refused(tmp_path):
-    folder = make_bundle(tmp_path)
-    (folder / "project.json").write_text(json.dumps({"format": 1, "name": "other"}), encoding="utf-8")
-    with pytest.raises(config.ConfigError):
-        export.export(folder, tmp_path / "out", "")
-    assert not (tmp_path / "out").exists()
-
-
 # Read back from a server
 
-def served_bundle(overseer, tmp_path, **bundle_args) -> tuple[str, Path]:
+def served_source(overseer, tmp_path, **source_args) -> tuple[str, export.Source]:
     """A made-up tracker `kiln.os` on the served copy, whose mount names `kiln.project.os` beside
-    it as the export's step 2 says, and the bundle that names it."""
+    it as the export's step 2 says, and the project that names it."""
     folder = overseer.folder()
     text = tracker_text(item("alpha")).replace(
         'project (label="Proj") {\n', 'project (label="Proj") {\n    - definition (source="kiln.project.os/definition", lazy=false)\n', 1)
     tracker = overseer.document(text, project="kiln", folder=folder)
-    return tracker, make_bundle(tmp_path, tracker=tracker, **bundle_args)
+    return tracker, make_source(tmp_path, tracker=tracker, **source_args)
 
 
-def test_the_definition_reads_back_as_the_bundle(overseer, tmp_path):
+def test_the_definition_reads_back_as_the_project(overseer, tmp_path):
     description = 'Kiln fires "pots".\nIt holds $(no) expression, a `tick`, a \\ and a\ttab.'
-    tracker, bundle = served_bundle(overseer, tmp_path)
+    tracker, want = served_source(overseer, tmp_path)
     out = tmp_path / "out"
-    report = export.export(bundle, out, description)
+    report = export.export(want, out, description)
     # Laid out as the server's own folder: the document beside the tracker, and its tools.
     (overseer.root / report.document).write_bytes(report.definition.read_bytes())
     for path in report.tools:
         put(overseer, tracker, path, (report.tools_dir / path).read_bytes())
 
     raw = definition.fetch(overseer.url, overseer.key, tracker)
-    want = config.load_bundle(bundle)
     got = definition.project(tracker, raw)
     assert got.repos == want.repos and got.places == want.places
     assert got.systems == want.systems and got.settings == want.settings
@@ -169,11 +161,9 @@ def test_the_definition_reads_back_as_the_bundle(overseer, tmp_path):
 
 
 def test_no_settings_and_no_tools_read_back(overseer, tmp_path):
-    tracker, bundle = served_bundle(overseer, tmp_path, settings={})
-    for path in (bundle / "tools").rglob("*"):
-        if path.is_file():
-            path.unlink()
-    report = export.export(bundle, tmp_path / "out", "")
+    tracker, source = served_source(overseer, tmp_path, settings={})
+    source.tools = None
+    report = export.export(source, tmp_path / "out", "")
     assert report.tools == []
     (overseer.root / report.document).write_bytes(report.definition.read_bytes())
     raw = definition.fetch(overseer.url, overseer.key, tracker)
@@ -181,33 +171,51 @@ def test_no_settings_and_no_tools_read_back(overseer, tmp_path):
 
 
 def test_the_trackers_description_is_read(overseer, tmp_path):
-    tracker, _ = served_bundle(overseer, tmp_path)
+    tracker, _ = served_source(overseer, tmp_path)
     assert export.tracker_description(overseer.url, overseer.key, tracker) == "A project for tests."
 
 
 # The command
 
+def make_psd1(root: Path, server: str = "https://overseer.example.test") -> Path:
+    """A script's project: its .psd1, its brief beside it and its tools folder."""
+    root.mkdir(parents=True, exist_ok=True)
+    key = root / "agents.key"
+    key.write_text("k", encoding="utf-8")
+    path = root / "kiln.psd1"
+    path.write_text(f"@{{ Tracker = 'alice/projects/kiln.os'; Server = '{server}'; KeyFile = '{key.as_posix()}'; "
+                    f"Repos = @('{(root / 'Kiln').as_posix()}'); Account = 1 }}\n", encoding="utf-8")
+    (root / "kiln.md").write_text(BRIEF, encoding="utf-8", newline="\n")
+    make_tools(root / "kiln")
+    return path
+
+
 def test_the_command_writes_and_says_what_is_left(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(config, "load_settings", lambda path=None: (_ for _ in ()).throw(config.ConfigError("settings.json", "", "none")))
+    monkeypatch.setenv("AGENTLOOP_HOME", str(tmp_path / "home"))
     described = tmp_path / "described.md"
     described.write_text("Kiln fires pots.\n", encoding="utf-8")
-    code = cli.main(["export-definition", str(make_bundle(tmp_path)), "--out", str(tmp_path / "out"),
+    code = cli.main(["import-psd1", str(make_psd1(tmp_path / "projects")), "--out", str(tmp_path / "out"),
                      "--tracker-description", str(described)])
     printed = capsys.readouterr().out
     assert code == 0
     assert (tmp_path / "out" / "kiln.project.os").is_file()
+    assert (tmp_path / "out" / "tools" / "kiln.project" / "sub" / "look.ps1").is_file()
     assert '- definition (source="kiln.project.os/definition", lazy=false)' in printed
-    assert "<server>/v1/file?doc=alice%2Fprojects%2Fkiln.project.os&path=probe.py" in printed
+    assert "https://overseer.example.test/v1/file?doc=alice%2Fprojects%2Fkiln.project.os&path=probe.py" in printed
+    assert "agentloop add https://overseer.example.test/doc/alice/projects/kiln.os --key-file " in printed
+    assert "Its sessions ran on the account in ~/.claude-account1" in printed
+    # Nothing is written to this machine's settings.
+    assert not (tmp_path / "home").exists()
 
 
-def test_the_command_without_a_description_or_a_server_is_refused(tmp_path, monkeypatch, capsys):
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps(config.empty_settings()), encoding="utf-8")
-    real = config.load_settings
-    monkeypatch.setattr(config, "load_settings", lambda path=None: real(settings_file))
-    code = cli.main(["export-definition", str(make_bundle(tmp_path)), "--out", str(tmp_path / "out")])
+def test_the_command_with_the_server_away_is_refused(tmp_path, capsys):
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        away = f"http://127.0.0.1:{s.getsockname()[1]}"
+    code = cli.main(["import-psd1", str(make_psd1(tmp_path / "projects", away)), "--out", str(tmp_path / "out")])
     assert code == 2
-    assert "--tracker-description" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "could not be reached" in error and "127.0.0.1" not in error
     assert not (tmp_path / "out").exists()
 
 
@@ -237,4 +245,4 @@ def test_the_docs_example_settings_load():
     settings = config.load_settings(DOCS_EXAMPLES / "settings.json")
     assert [l.tracker for l in settings.loops] == ["alice/projects/quill.os", "alice/projects/quill.os", "bob/orchard.os"]
     assert settings.loop("quill-2").places == {"press": "C:/Program Files/Press"}
-    assert not settings.bundles
+    assert "bundles" not in settings.raw

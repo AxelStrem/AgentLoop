@@ -114,20 +114,25 @@ def test_import_psd1(agentloop_cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTLOOP_HOME", str(tmp_path / "home"))
     (tmp_path / "Code").mkdir()
     path = _psd1(tmp_path, "proj", f"@{{ Tracker = 'a/proj.os'; Server = 'https://s'; KeyFile = 'k'; Repos = @('{tmp_path / 'Code'}') }}")
-    done = _run(agentloop_cmd, "import-psd1", str(path))
+    described = tmp_path / "described.md"
+    described.write_text("Proj.\n", encoding="utf-8")
+    out = tmp_path / "out"
+    done = _run(agentloop_cmd, "import-psd1", str(path), "--out", str(out), "--tracker-description", str(described))
     assert done.returncode == 0, done.stderr
-    assert "worker  account1 (new)" in done.stdout and "loop    proj" in done.stdout
-    assert (tmp_path / "home" / "config" / "bundles" / "proj" / "project.json").is_file()
-    again = _run(agentloop_cmd, "import-psd1", str(path))
+    assert f"definition  {out / 'proj.project.os'}" in done.stdout
+    assert "agentloop add https://s/doc/a/proj.os --key-file k --repo code=" in done.stdout
+    assert (out / "proj.project.os").is_file()
+    # The export is all it writes: no settings, no bundle.
+    assert not (tmp_path / "home").exists()
+    again = _run(agentloop_cmd, "import-psd1", str(path), "--out", str(out), "--tracker-description", str(described))
     assert again.returncode == 2
-    assert again.stderr == 'agentloop import-psd1: settings.json: a loop named "proj" is there already; --replace replaces it\n'
-    assert _run(agentloop_cmd, "import-psd1", str(path), "--replace").returncode == 0
+    assert again.stderr == f"agentloop import-psd1: {out}: out: is not an empty folder; nothing is written over\n"
 
 
 def test_import_psd1_says_what_is_wrong(agentloop_cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTLOOP_HOME", str(tmp_path / "home"))
     path = _psd1(tmp_path, "proj", "@{\n Tracker = \"$HOME/x.os\"\n}")
-    done = _run(agentloop_cmd, "import-psd1", str(path))
+    done = _run(agentloop_cmd, "import-psd1", str(path), "--out", str(tmp_path / "out"))
     assert done.returncode == 2
     assert done.stderr.startswith("agentloop import-psd1: proj.psd1: line 2: a double-quoted string with a $")
     assert "Traceback" not in done.stderr

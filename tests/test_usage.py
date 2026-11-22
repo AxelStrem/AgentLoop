@@ -31,7 +31,7 @@ def _run(tmp_path: Path, scenario: str, fake_claude) -> SessionResult:
     spec = SessionSpec(
         claude=session.find_claude(), session_id="11111111-2222-3333-4444-555555555555", resume=False,
         prompt="Work the item.", route=Route("sonnet", "high"), workdir=work,
-        system_file=session.write_system_file(data / "system.md", "guide", "about", "brief"),
+        system_file=session.write_system_file(data / "system.md", "guide", "about"),
         settings=session.write_session_settings(data / "loop-settings.json"),
         log=data / "loop-1-build.jsonl",
         variables=session.session_variables(author="a", scratch=data / "s", tracker="x/y.os", item="p:thing"),

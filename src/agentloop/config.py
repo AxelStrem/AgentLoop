@@ -1,5 +1,7 @@
-"""Bundles and machine settings: where they live, reading and checking them, layering the run
-settings, placing a bundle's repositories on this PC, and writing the files back.
+"""Machine settings and the projects the loops read: where the settings live, reading and checking
+them, layering the run settings, placing a project's repositories on this PC, and writing the
+settings back. A project is only ever read from its tracker (`definition.py`); local bundles are
+gone (item drop-bundle-source).
 
 What each file holds is docs/settings.md. The script's side is the start of run-agent-loop.ps1:
 its `$Routes`, `$Escalation`, `$BuildAfterTriage`, `$BuildInTriageUpTo` and `$Trial`, its
@@ -24,7 +26,7 @@ FORMAT = 1
 # A repository's, a project's, a worker's or a loop's name.
 NAME = re.compile(r"^[a-z0-9_-]+$")
 
-# The systems a bundle can say it runs on, as `this_system` names them.
+# The systems a project can say it runs on, as `this_system` names them.
 SYSTEMS = ("windows", "macos", "linux")
 
 # What the brief and AUTOTASK.md write as `{tools}`, `{bundle}` and `{python}`, filled in for this
@@ -105,10 +107,6 @@ class Paths:
     def settings(self) -> Path:
         return self.config / "settings.json"
 
-    @property
-    def bundles(self) -> Path:
-        return self.config / "bundles"
-
 
 def paths() -> Paths:
     """This OS's places for the app's settings and its data, or both under AGENTLOOP_HOME."""
@@ -127,7 +125,7 @@ def paths() -> Paths:
 
 
 def this_system() -> str:
-    """This OS, as a bundle's `systems` names it."""
+    """This OS, as a project's `systems` names it."""
     if sys.platform == "win32":
         return "windows"
     if sys.platform == "darwin":
@@ -268,7 +266,7 @@ def _read_json(path: Path, where: str) -> dict:
     return raw
 
 
-# The bundle
+# The project
 
 @dataclass
 class Tracker:
@@ -279,13 +277,10 @@ class Tracker:
 
 @dataclass
 class Project:
-    """A project as the loop reads it, wherever it came from: the definition beside its tracker,
-    which the tracker mounts (item doc-read, `definition.py`), or a bundle folder on this PC - its
-    `project.json` and `brief.md` - kept for trying a brief out (item project-doc)."""
+    """A project as the loop reads it: the definition beside its tracker, which the tracker mounts
+    (item doc-read, `definition.py`)."""
 
     name: str
-    # The bundle's folder; None for a project read from its tracker, which has no folder here.
-    folder: Path | None
     tracker: Tracker
     repos: list[str]
     settings: dict
@@ -296,36 +291,22 @@ class Project:
     places: list[str] = field(default_factory=list)
     # What each repository and place is, by its name: the line a person placing it reads.
     about: dict[str, str] = field(default_factory=dict)
-    # What the project is: a definition's one description. A bundle's is its brief.md, read when
-    # a run starts, so this stays empty for one.
+    # What the project is: the definition's one description.
     description: str = ""
-    # "tracker" or "bundle".
-    source: str = "bundle"
-    # The definition's version as read; None for a bundle.
+    # The definition's version as read.
     version: str | None = None
-    # A project read from its tracker: the folder its tools were fetched into, which holds them in
-    # `tools/` as a bundle's folder does, and which `{bundle}` names (item tools-fetch); None when
-    # it lists no tools for this system, or for a bundle.
+    # The folder the project's tools were fetched into, which holds them in `tools/` and which
+    # `{bundle}` names - the name kept from when a project was a bundle folder, which definitions
+    # already write (item tools-fetch); None when it lists no tools for this system.
     files: Path | None = None
 
     @property
-    def brief(self) -> Path:
-        if self.folder is None:
-            raise ConfigError(self.name, "", "is read from its tracker, and has no brief.md")
-        return self.folder / "brief.md"
-
-    @property
     def tools(self) -> Path | None:
-        home = self.folder or self.files
-        return home / "tools" if home else None
+        return self.files / "tools" if self.files else None
 
     def repo_names(self) -> list[str]:
         """Every repository name the project uses."""
         return list(self.repos)
-
-
-# What the code was written with before a project could come from its tracker.
-Bundle = Project
 
 
 def entry_names(entries: list | None) -> tuple[list[str], dict[str, str]]:
@@ -341,46 +322,6 @@ def entry_names(entries: list | None) -> tuple[list[str], dict[str, str]]:
         else:
             names.append(entry)
     return names, about
-
-
-def load_bundle(folder: str | Path) -> Project:
-    folder = expand(folder) if isinstance(folder, str) else folder
-    where = f"{folder.name}/project.json"
-    raw = _read_json(folder / "project.json", where)
-    check_bundle(raw, where, folder.name)
-    tracker = raw["tracker"]
-    repos, about = entry_names(raw["repos"])
-    places, place_about = entry_names(raw.get("places"))
-    return Project(
-        name=raw["name"],
-        folder=folder,
-        tracker=Tracker(server=tracker["server"]),
-        repos=repos,
-        settings=raw.get("settings") or {},
-        raw=raw,
-        systems=list(raw["systems"]) if raw.get("systems") is not None else None,
-        places=places,
-        about={**about, **place_about},
-    )
-
-
-def check_bundle(raw: dict, where: str, folder_name: str) -> None:
-    _check_format(where, raw)
-    name = raw.get("name")
-    if not isinstance(name, str) or not NAME.match(name):
-        raise ConfigError(where, "name", "missing, or not lower case letters, digits, - and _")
-    if name != folder_name:
-        raise ConfigError(where, "name", f'is "{name}", but the bundle\'s folder is "{folder_name}"; they must be the same')
-    tracker = raw.get("tracker")
-    if isinstance(tracker, dict) and set(tracker) == {"server"}:
-        if not _text(tracker["server"]):
-            raise ConfigError(where, "tracker.server", "the tracker's name on the server, e.g. alice/projects/x.os")
-    elif isinstance(tracker, dict) and "path" in tracker:
-        raise ConfigError(where, "tracker", "names a file in a repository, and trackers are kept only on an Overseer "
-                          'server now: {"server": its name there, e.g. alice/projects/x.os}')
-    else:
-        raise ConfigError(where, "tracker", '{"server": the tracker\'s name on the server}')
-    check_project(raw, where)
 
 
 def _check_entries(where: str, key: str, entries: list, what: str, more: tuple[str, ...] = ()) -> list[str]:
@@ -409,8 +350,7 @@ def _check_entries(where: str, key: str, entries: list, what: str, more: tuple[s
 
 
 def check_project(raw: dict, where: str) -> None:
-    """What a project holds, whether a bundle's project.json or a tracker's definition gives it:
-    its repositories, places, systems and run settings."""
+    """What a project's definition holds: its repositories, places, systems and run settings."""
     repos = raw.get("repos")
     if not isinstance(repos, list):
         raise ConfigError(where, "repos", "a list of repository names")
@@ -550,15 +490,16 @@ class Loop:
     worker: str
     repos: dict[str, str]
     settings: dict
-    # Each folder the bundle names that is not a repository, by its name: never git-checked or
+    # Each folder the project names that is not a repository, by its name: never git-checked or
     # committed.
     places: dict[str, str] = field(default_factory=dict)
     # The loop this one is a copy of: what it does not give itself is that loop's. Its fields here
     # are the two put together; the settings' raw dict holds only its own.
     like: str | None = None
     # The tracker the loop reads its project's definition from, as the server names it - the
-    # project being its file name without `.os` - or None for a loop on a bundle (item doc-read).
-    tracker: str | None = None
+    # project being its file name without `.os` (item doc-read). Every loop has one: the empty
+    # default is only for building a Loop in code before its tracker is known.
+    tracker: str = ""
     # The Overseer server and key file this loop reaches its tracker with, {"server", "keyFile"},
     # when they are not its worker's: a tracker on another server than the worker's (item
     # loop-from-url). None for the worker's.
@@ -622,7 +563,6 @@ def tracker_project(tracker: str) -> str | None:
 class Settings:
     path: Path
     raw: dict
-    bundles: list[str] = field(default_factory=list)
     workers: list[Worker] = field(default_factory=list)
     loops: list[Loop] = field(default_factory=list)
     defaults: dict = field(default_factory=dict)
@@ -649,7 +589,7 @@ class Settings:
 
 
 def empty_settings() -> dict:
-    return {"format": FORMAT, "bundles": [], "workers": [], "loops": [], "defaults": {}}
+    return {"format": FORMAT, "workers": [], "loops": [], "defaults": {}}
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -686,9 +626,13 @@ def _limits(where: str, at: str, raw) -> dict | None:
 def parse_settings(raw: dict, path: Path) -> Settings:
     where = path.name
     _check_format(where, raw)
-    bundles = raw.get("bundles", [])
-    if not isinstance(bundles, list) or not all(_text(b) for b in bundles):
-        raise ConfigError(where, "bundles", "a list of the bundle folders' paths")
+    # Local bundles are gone (item drop-bundle-source). An empty list, as settings written before
+    # then hold, means nothing and is let be; one that names a bundle is a loop that would no
+    # longer run, so it is said rather than ignored.
+    bundles = raw.get("bundles")
+    if bundles not in (None, []):
+        raise ConfigError(where, "bundles", "local bundles are gone: a project is read from its tracker. Add each loop "
+                          "from its tracker (agentloop add), then take the bundles out of the settings")
 
     workers = []
     for index, w in enumerate(_list(raw, "workers", where)):
@@ -736,15 +680,12 @@ def parse_settings(raw: dict, path: Path) -> Settings:
         like = l.get("like")
         if like is not None and (not isinstance(like, str) or not NAME.match(like)):
             raise ConfigError(where, f"{at}.like", "the name of the loop this one is a copy of")
-        if "tracker" in l:
-            # A loop reads its project from the tracker, or from a bundle; never both.
-            if "project" in l:
-                raise ConfigError(where, f"{at}.tracker", "a loop names its tracker or a bundle's project, not both")
-            if not isinstance(l["tracker"], str) or tracker_project(l["tracker"]) is None:
+        if "project" in l:
+            raise ConfigError(where, f"{at}.project", "names a local bundle, and bundles are gone: a loop names its "
+                              "tracker. Add the loop again from its tracker (agentloop add)")
+        if "tracker" in l or like is None:
+            if not isinstance(l.get("tracker"), str) or tracker_project(l["tracker"]) is None:
                 raise ConfigError(where, f"{at}.tracker", "the tracker's name on the server, e.g. alice/projects/x.os")
-        elif like is None or "project" in l:
-            if not isinstance(l.get("project"), str) or not NAME.match(l["project"]):
-                raise ConfigError(where, f"{at}.project", "a bundle's name, or a tracker in place of it")
         if like is None or "worker" in l:
             if not any(w.name == l.get("worker") for w in workers):
                 raise ConfigError(where, f"{at}.worker", f'no worker named "{l.get("worker")}"')
@@ -776,9 +717,8 @@ def parse_settings(raw: dict, path: Path) -> Settings:
         at = f"loops[{index}]"
         like = l.get("like")
         if like is None:
-            tracker = l.get("tracker")
-            project = tracker_project(tracker) if tracker else l["project"]
-            loops.append(Loop(l["name"], project, l["worker"], dict(l.get("repos", {})), l.get("settings") or {},
+            tracker = l["tracker"]
+            loops.append(Loop(l["name"], tracker_project(tracker), l["worker"], dict(l.get("repos", {})), l.get("settings") or {},
                               dict(l.get("places", {})), tracker=tracker, overseer=l.get("overseer")))
             continue
         # One level only: a copy of a copy would be a chain to follow, and could be a cycle.
@@ -787,12 +727,10 @@ def parse_settings(raw: dict, path: Path) -> Settings:
             raise ConfigError(where, f"{at}.like", f'no other loop named "{like}"')
         if base.get("like") is not None:
             raise ConfigError(where, f"{at}.like", f'"{like}" is itself a copy of "{base["like"]}"; name that loop')
-        if l.get("project", base.get("project")) != base.get("project"):
-            raise ConfigError(where, f"{at}.project", f'a copy works the project of the loop it is like, {base.get("project") or base.get("tracker")}')
-        if l.get("tracker", base.get("tracker")) != base.get("tracker"):
-            raise ConfigError(where, f"{at}.tracker", f'a copy works the project of the loop it is like, {base.get("tracker") or base.get("project")}')
-        tracker = base.get("tracker")
-        loops.append(Loop(l["name"], tracker_project(tracker) if tracker else base["project"], l.get("worker", base["worker"]),
+        if l.get("tracker", base["tracker"]) != base["tracker"]:
+            raise ConfigError(where, f"{at}.tracker", f'a copy works the project of the loop it is like, {base["tracker"]}')
+        tracker = base["tracker"]
+        loops.append(Loop(l["name"], tracker_project(tracker), l.get("worker", base["worker"]),
                           {**base.get("repos", {}), **l.get("repos", {})},
                           merge_layers(base.get("settings"), l.get("settings")),
                           {**base.get("places", {}), **l.get("places", {})}, like, tracker,
@@ -814,7 +752,7 @@ def parse_settings(raw: dict, path: Path) -> Settings:
     # An `overseer` - {"bin": ..., "library": ...}, where tracker.py once found the server that
     # served a tracker file and then Overseer's library - is let be in settings written then, and
     # means nothing now: the template comes from the server a worker names (item own-server).
-    return Settings(path, raw, list(bundles), workers, loops, raw.get("defaults") or {}, claude, default_worker)
+    return Settings(path, raw, workers, loops, raw.get("defaults") or {}, claude, default_worker)
 
 
 def _list(raw: dict, key: str, where: str) -> list:
@@ -826,29 +764,14 @@ def _list(raw: dict, key: str, where: str) -> list:
 
 @dataclass
 class Machine:
-    """The settings, and the bundles they list, each loop's project among them."""
+    """This machine's settings. A loop's project is not read here: it is read from the server when
+    the loop starts (definition.project_for), and loading the machine never waits on the network."""
 
     settings: Settings
-    bundles: dict[str, Bundle]
-
-    def bundle(self, name: str) -> Bundle | None:
-        return self.bundles.get(name)
 
 
 def load_machine(path: Path | None = None) -> Machine:
-    settings = load_settings(path)
-    bundles: dict[str, Bundle] = {}
-    for index, folder in enumerate(settings.bundles):
-        bundle = load_bundle(folder)
-        if bundle.name in bundles:
-            raise ConfigError(settings.path.name, f"bundles[{index}]", f'a second bundle named "{bundle.name}"')
-        bundles[bundle.name] = bundle
-    # A loop on a tracker is not looked for here: its project is read from the server when the loop
-    # starts (definition.project_for), and loading the machine never waits on the network.
-    for index, loop in enumerate(settings.loops):
-        if loop.tracker is None and loop.project not in bundles:
-            raise ConfigError(settings.path.name, f"loops[{index}].project", f'no bundle named "{loop.project}" in bundles')
-    return Machine(settings, bundles)
+    return Machine(load_settings(path))
 
 
 # Run settings, layered
@@ -867,7 +790,7 @@ def merge_layers(*layers: dict | None) -> dict:
 
 
 def effective_settings(*layers: dict | None) -> dict:
-    """The app's defaults, then each layer in turn: the machine's `defaults`, the bundle's
+    """The app's defaults, then each layer in turn: the machine's `defaults`, the project's
     `settings`, the loop's `settings`. `routes` merge per route, as the script merges a project's
     Routes over `$Routes`; every other key replaces."""
     result = copy.deepcopy(DEFAULTS)
@@ -881,10 +804,8 @@ def effective_settings(*layers: dict | None) -> dict:
 
 
 def loop_settings(machine: Machine, loop: Loop, project: Project | None = None) -> dict:
-    """What the loop runs with. A loop on a tracker gives the project it read; without it, only the
-    machine's and the loop's layers are known."""
-    if project is None:
-        project = machine.bundles.get(loop.project) if loop.tracker is None else None
+    """What the loop runs with: the project it read gives its layer; without it, only the machine's
+    and the loop's layers are known."""
     return effective_settings(machine.settings.defaults, project.settings if project else None, loop.settings)
 
 
@@ -928,46 +849,46 @@ class Placed:
 
 def project_where(project: Project) -> str:
     """Where a project's settings are, for an error about them."""
-    return f"{project.tracker.server} definition" if project.source == "tracker" else f"{project.name}/project.json"
+    return f"{project.tracker.server} definition"
 
 
-def check_system(bundle: Project) -> None:
+def check_system(project: Project) -> None:
     """Refuses a project that does not run on this OS, as it says."""
     here = this_system()
-    if bundle.systems is not None and here not in bundle.systems:
-        raise ConfigError(project_where(bundle), "systems", f"{bundle.name} runs on {', '.join(bundle.systems)}, not on {here}")
+    if project.systems is not None and here not in project.systems:
+        raise ConfigError(project_where(project), "systems", f"{project.name} runs on {', '.join(project.systems)}, not on {here}")
 
 
-def place_repos(loop: Loop, bundle: Bundle, top_of: Callable[[Path], Path | None] = repo_top) -> Placed:
-    """Each repository name the bundle uses, placed through the loop and named by the top of its
+def place_repos(loop: Loop, project: Project, top_of: Callable[[Path], Path | None] = repo_top) -> Placed:
+    """Each repository name the project uses, placed through the loop and named by the top of its
     repository, as the script resolves `Repos`."""
-    placed, problems = _place(loop, bundle, top_of)
+    placed, problems = _place(loop, project, top_of)
     if problems:
         raise problems[0]
     return placed
 
 
-def missing(loop: Loop, bundle: Bundle, top_of: Callable[[Path], Path | None] = repo_top) -> list[ConfigError]:
+def missing(loop: Loop, project: Project, top_of: Callable[[Path], Path | None] = repo_top) -> list[ConfigError]:
     """Everything place_repos would refuse in a loop, not only the first: what the page asks for
     before it starts one."""
-    return _place(loop, bundle, top_of)[1]
+    return _place(loop, project, top_of)[1]
 
 
-def tops(loop: Loop, bundle: Bundle, top_of: Callable[[Path], Path | None] = repo_top) -> list[Path]:
+def tops(loop: Loop, project: Project, top_of: Callable[[Path], Path | None] = repo_top) -> list[Path]:
     """The repository tops the loop commits in, as far as they can be placed now: what two loops of
     one project may not share."""
-    placed = _place(loop, bundle, top_of)[0]
+    placed = _place(loop, project, top_of)[0]
     return placed.tops if placed else []
 
 
-def _place(loop: Loop, bundle: Bundle, top_of: Callable[[Path], Path | None]) -> tuple[Placed | None, list[ConfigError]]:
+def _place(loop: Loop, project: Project, top_of: Callable[[Path], Path | None]) -> tuple[Placed | None, list[ConfigError]]:
     where = f'loop "{loop.name}"'
     problems: list[ConfigError] = []
     folders: dict[str, Path] = {}
     tops: list[Path] = []
-    for name in bundle.repo_names():
+    for name in project.repo_names():
         if name not in loop.repos:
-            problems.append(ConfigError(where, f"repos.{name}", f"{bundle.name} uses the repository {name}, and this loop does not say where it is"))
+            problems.append(ConfigError(where, f"repos.{name}", f"{project.name} uses the repository {name}, and this loop does not say where it is"))
             continue
         folder = expand(loop.repos[name])
         if not folder.is_dir():
@@ -982,14 +903,14 @@ def _place(loop: Loop, bundle: Bundle, top_of: Callable[[Path], Path | None]) ->
         if top not in tops:
             tops.append(top)
     places: dict[str, Path] = {}
-    for name in bundle.places:
+    for name in project.places:
         if name not in loop.places:
-            problems.append(ConfigError(where, f"places.{name}", f"{bundle.name} names the folder {name}, and this loop does not say where it is"))
+            problems.append(ConfigError(where, f"places.{name}", f"{project.name} names the folder {name}, and this loop does not say where it is"))
             continue
         places[name] = expand(loop.places[name])
         if not places[name].exists():
             problems.append(ConfigError(where, f"places.{name}", "no such folder"))
-    return Placed(tops, folders, bundle.tracker.server, places), problems
+    return Placed(tops, folders, project.tracker.server, places), problems
 
 
 # Writing
@@ -1012,11 +933,9 @@ def save_settings(raw: dict, path: Path | None = None) -> Settings:
     """Checks the settings, then writes them; a change that would not load is never written."""
     path = path or paths().settings
     settings = parse_settings(raw, path)
+    # The empty `bundles` settings written before bundles went (item drop-bundle-source) is
+    # dropped as soon as the settings are written again.
+    if raw.get("bundles") == []:
+        del raw["bundles"]
     save_json(path, raw)
     return settings
-
-
-def save_bundle(folder: Path, raw: dict) -> Bundle:
-    check_bundle(raw, f"{folder.name}/project.json", folder.name)
-    save_json(folder / "project.json", raw)
-    return load_bundle(folder)

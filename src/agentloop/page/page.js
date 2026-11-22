@@ -1,5 +1,5 @@
-// The page: this machine's loops, started, stopped and killed; their settings, the bundles' and
-// the machine's; the workers; and each loop's output as it comes, in the script's colours.
+// The page: this machine's loops, started, stopped and killed; their settings and the
+// machine's; the workers; and each loop's output as it comes, in the script's colours.
 //
 // Plain JavaScript, no framework and no build step. Every text from the server goes in through
 // textContent, never as markup. Every write sends the version of the file it read, and a write
@@ -43,7 +43,6 @@ const PANE_MIN_WIDTH = 420;
 const state = {
   loops: [], loopsVersion: null,
   settings: null, settingsVersion: null, appDefaults: null,
-  bundles: [], bundleRaw: {},
   accounts: null, accountsAsked: null,
   panes: new Map(), active: null,
 };
@@ -149,12 +148,11 @@ function valueText(key, value) {
 
 function showView() {
   const view = (location.hash || "#loops").slice(1);
-  for (const name of ["loops", "machine", "bundles"]) {
+  for (const name of ["loops", "machine"]) {
     $(`view-${name}`).hidden = name !== view;
   }
   for (const a of document.querySelectorAll(".top nav a")) a.classList.toggle("active", a.dataset.view === view);
   if (view === "machine") renderMachine();
-  if (view === "bundles") renderBundles();
 }
 
 // Reading what the server holds
@@ -182,14 +180,6 @@ async function loadSettings() {
   state.settings = data.settings;
   state.settingsVersion = data.version;
   state.appDefaults = data.appDefaults;
-}
-
-async function loadBundles() {
-  const data = await api("GET", "/api/bundles");
-  state.bundles = data.bundles;
-  const raws = await Promise.all(state.bundles.map((b) => api("GET", `/api/bundles/${encodeURIComponent(b.name)}`).catch(() => null)));
-  state.bundleRaw = {};
-  state.bundles.forEach((b, i) => { if (raws[i]) state.bundleRaw[b.name] = raws[i]; });
 }
 
 // claude answers for each account in a second or two, so the page asks once and keeps the answer
@@ -268,10 +258,7 @@ function renderLoops() {
     const canStart = !s.alive && !s.busy;
     const row = h("tr", {},
       h("td", { "data-label": "loop" }, h("strong", { text: loop.name }), loop.like ? h("span", { class: "sub", text: `copy of ${loop.like}` }) : null),
-      // A loop on a local bundle is marked: projects are read from their trackers now, and a
-      // bundle is for trying a brief out (item doc-read).
       h("td", { "data-label": "project" }, loop.project,
-        loop.source === "bundle" ? h("span", { class: "chip", title: "Runs on a bundle folder on this PC, not on the definition beside its tracker", text: "local bundle" }) : null,
         // A loop that reaches its tracker on a server of its own, not its worker's (item loop-from-url).
         loop.server ? h("span", { class: "chip", title: "Its tracker is on this server, reached with the loop's own key file, not its worker's", text: loop.server }) : null,
         // A changed definition: waiting to be accepted, or used at once and not yet dismissed
@@ -527,7 +514,7 @@ async function killLoop(name) {
 }
 
 async function deleteLoop(name) {
-  if (!confirm(`Delete the loop ${name} from this machine's settings? Its project's bundle and repositories are left as they are.`)) return;
+  if (!confirm(`Delete the loop ${name} from this machine's settings? Its repositories are left as they are.`)) return;
   try {
     await api("DELETE", `/api/loops/${encodeURIComponent(name)}`, { version: state.loopsVersion });
     closePane(name);
@@ -946,16 +933,14 @@ function markInputs(root, field) {
 // keeps only what is set here.
 async function editLoop(name, problems, copyOf) {
   try {
-    await Promise.all([loadSettings(), loadBundles(), loadAccounts(false).catch(() => null)]);
+    await Promise.all([loadSettings(), loadAccounts(false).catch(() => null)]);
   } catch (error) {
     failed(error);
     return;
   }
   const loops = state.settings.loops || [];
-  const raw = name ? copy(loops.find((l) => l.name === name)) : copyOf ? { name: "", like: copyOf, repos: {} } : {
-    name: "", project: state.bundles[0] ? state.bundles[0].name : "", worker: (state.settings.workers || [])[0]?.name || "",
-    repos: {}, places: {}, settings: {},
-  };
+  // A new loop is added from its tracker (addFromTracker); this form edits one, or makes a copy.
+  const raw = name ? copy(loops.find((l) => l.name === name)) : { name: "", like: copyOf, repos: {} };
   if (!raw) {
     say(`No loop named ${name}.`, true);
     return;
@@ -971,47 +956,40 @@ async function editLoop(name, problems, copyOf) {
   const root = h("div");
   let settingsPart = null;
   const nameInput = h("input", { value: raw.name, required: true, pattern: "[a-z0-9_-]+" });
-  // A loop on a tracker keeps it: the form changes where its repositories are, not what it works.
-  const shown = raw.tracker ? (state.loops || []).find((l) => l.name === name) : null;
-  const project = raw.tracker
-    ? h("select", { disabled: true }, h("option", { value: "" }, raw.tracker))
-    : h("select", {}, state.bundles.map((b) => h("option", { value: b.name, selected: b.name === raw.project }, b.name)));
+  // A loop keeps its tracker: the form changes where its repositories are, not what it works.
+  const shown = (state.loops || []).find((l) => l.name === name);
+  const project = h("select", { disabled: true }, h("option", { value: "" }, raw.tracker));
   const worker = h("select");
   const placesBox = h("div");
   const settingsBox = h("div");
 
   const draw = () => {
-    const bundle = raw.tracker ? (shown && shown.definition) : state.bundles.find((b) => b.name === project.value);
+    const named = shown && shown.definition;
     worker.replaceChildren(...(state.settings.workers || []).map((w) => h("option", {
       value: w.name, selected: w.name === raw.worker, disabled: !w.overseer && !raw.overseer,
     }, w.name + (!w.overseer && !raw.overseer ? " (no server)" : ""))));
     placesBox.replaceChildren();
-    if (bundle) {
+    if (named) {
       placesBox.append(h("h3", { text: "Where each repository is on this machine" }));
-      for (const repo of bundle.repos) {
+      for (const repo of named.repos) {
         const input = h("input", { "data-repo": repo, value: raw.repos[repo] || "", placeholder: "a folder inside a git repository" });
-        placesBox.append(field(repo, bundle.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
+        placesBox.append(field(repo, named.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
       }
-      for (const place of bundle.places || []) {
+      for (const place of named.places || []) {
         const input = h("input", { "data-place": place, value: (raw.places || {})[place] || "", placeholder: "a folder; never committed" });
         placesBox.append(field(place, "A folder the brief names that is not a repository.", input, `places.${place}`));
       }
     }
-    const bundleSettings = raw.tracker ? null : ((state.bundleRaw[project.value] || {}).bundle || {}).settings;
-    const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults], ["the bundle", bundleSettings]]);
+    const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults]]);
     settingsPart = settingsEditor(raw.settings || {}, beneath);
-    if (raw.tracker && !bundle) placesBox.append(h("p", { class: "sub", text: "Its repositories are named by the definition beside its tracker, read when the loop first starts." }));
+    if (!named) placesBox.append(h("p", { class: "sub", text: "Its repositories are named by the definition beside its tracker, read when the loop first starts." }));
     settingsBox.replaceChildren(h("h3", { text: "Run settings" }), settingsPart.el);
   };
-  project.addEventListener("change", () => {
-    raw.project = project.value;
-    draw();
-  });
   worker.addEventListener("change", () => { raw.worker = worker.value; });
   draw();
   root.append(
     field("name", "The page's name for the loop, unique on this machine: lower case, digits, - and _.", nameInput, "name"),
-    field(raw.tracker ? "tracker" : "project", raw.tracker ? "The tracker it reads its project from." : "The bundle it works.", project, raw.tracker ? "tracker" : "project"),
+    field("tracker", "The tracker it reads its project from.", project, "tracker"),
     field("worker", "The Claude account it runs on, and the server and key it reaches the tracker with.", worker, "worker"),
     placesBox, settingsBox);
 
@@ -1027,7 +1005,6 @@ async function editLoop(name, problems, copyOf) {
       ...raw, name: nameInput.value.trim(), worker: worker.value,
       repos: {}, places: {}, settings: settingsPart.collect(),
     };
-    if (!raw.tracker) loop.project = project.value;
     for (const input of root.querySelectorAll("[data-repo]")) if (input.value.trim()) loop.repos[input.dataset.repo] = input.value.trim();
     for (const input of root.querySelectorAll("[data-place]")) if (input.value.trim()) loop.places[input.dataset.place] = input.value.trim();
     if (!Object.keys(loop.places).length) delete loop.places;
@@ -1268,7 +1245,8 @@ function editCopy(name, raw, base, problems) {
     say(`No loop named ${raw.like}, which ${name || "the copy"} is a copy of.`, true);
     return;
   }
-  const bundle = state.bundles.find((b) => b.name === base.project);
+  // What the original places, as its definition last read names them.
+  const named = ((state.loops || []).find((l) => l.name === base.name) || {}).definition;
   const root = h("div");
   const nameInput = h("input", { value: raw.name, required: true, pattern: "[a-z0-9_-]+" });
   const worker = h("select", {},
@@ -1283,26 +1261,26 @@ function editCopy(name, raw, base, problems) {
   const folder = (kind, key, own, theirs, what) =>
     h("input", { [`data-${kind}`]: key, value: own || "", placeholder: theirs ? `as ${base.name}: ${theirs}` : what });
   const placesBox = h("div");
-  if (bundle) {
+  if (named) {
+    const project = base.tracker.replace(/^.*\//, "").replace(/\.os$/, "");
     placesBox.append(h("h3", { text: "Where each repository is on this machine" }),
-      h("p", { class: "sub", text: `Each its own clone: two loops of ${base.project} may not commit in one repository.` }));
-    for (const repo of bundle.repos) {
+      h("p", { class: "sub", text: `Each its own clone: two loops of ${project} may not commit in one repository.` }));
+    for (const repo of named.repos) {
       const input = folder("repo", repo, (raw.repos || {})[repo], (base.repos || {})[repo], "a folder inside a git repository");
-      placesBox.append(field(repo, bundle.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
+      placesBox.append(field(repo, named.repos[0] === repo ? "Sessions run here." : "", input, `repos.${repo}`));
     }
-    for (const place of bundle.places || []) {
+    for (const place of named.places || []) {
       const input = folder("place", place, (raw.places || {})[place], (base.places || {})[place], "a folder; never committed");
       placesBox.append(field(place, "A folder the brief names that is not a repository; left empty, the original's.", input, `places.${place}`));
     }
   }
-  const bundleSettings = ((state.bundleRaw[base.project] || {}).bundle || {}).settings;
-  const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults], ["the bundle", bundleSettings],
+  const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults],
     [`the loop ${base.name}`, base.settings]]);
   const settingsPart = settingsEditor(raw.settings || {}, beneath);
   root.append(
     field("name", "The page's name for the loop, unique on this machine: lower case, digits, - and _.", nameInput, "name"),
     field("copy of", `What is not set here is ${base.name}'s, and follows it when it changes.`, h("strong", { text: base.name }), "like"),
-    field("project", "The original's.", h("select", { disabled: true }, h("option", {}, base.project)), "project"),
+    field("tracker", "The original's.", h("select", { disabled: true }, h("option", {}, base.tracker)), "tracker"),
     field("worker", "The Claude account it runs on: another one than the original's, to run on its usage.", worker, "worker"),
     placesBox, h("h3", { text: "Run settings" }), settingsPart.el);
   const body = {
@@ -1332,7 +1310,6 @@ function editCopy(name, raw, base, problems) {
   openEditor(name ? `The loop ${name}` : `A copy of ${base.name}`, body, save, problems);
 }
 
-$("add-loop").addEventListener("click", () => editLoop(null));
 $("add-from-tracker").addEventListener("click", () => addFromTracker());
 
 // This machine: its workers and its settings.
@@ -1589,17 +1566,14 @@ function drawMachineSettings() {
   const port = h("input", { type: "number", class: "short", min: "0", max: "65535", value: (raw.server || {}).port ?? "", placeholder: "8765" });
   const install = h("input", { value: raw.install || "", placeholder: "not built yet" });
   const claude = h("input", { value: raw.claude || "", placeholder: "found on PATH" });
-  const bundles = h("textarea", { rows: String(Math.max(2, (raw.bundles || []).length)), class: "mono", style: "flex: 1 1 30rem; max-width: 40rem" });
-  bundles.value = (raw.bundles || []).join("\n");
   const defaults = settingsEditor(raw.defaults || {}, beneathOf([["the app", state.appDefaults]]));
   const problem = h("p", { class: "problems", hidden: true });
   form.append(
     field("page's port", "The port agentloop serve listens on, on 127.0.0.1; used from the next start of the server.", port, "server.port"),
     field("build installed at", "Where agentloop build puts the copy of the app that runs.", install, "install"),
     field("claude", "The claude to run, where it is not on PATH.", claude, "claude"),
-    field("bundle folders", "The folders of the bundles this machine knows, one a line.", bundles, "bundles"),
     h("h3", { text: "Run settings for every loop here" }),
-    h("p", { class: "note", text: "Beneath each bundle's and each loop's own." }),
+    h("p", { class: "note", text: "Beneath each project's and each loop's own." }),
     defaults.el, problem,
     h("div", { class: "buttons" }, h("button", { type: "submit", class: "primary" }, "Save")));
   form.onsubmit = async (event) => {
@@ -1614,7 +1588,8 @@ function drawMachineSettings() {
         r.claude = claude.value.trim() || null;
         // An Overseer library named here once means nothing now: the server hands out the template.
         delete r.overseer;
-        r.bundles = bundles.value.split("\n").map((x) => x.trim()).filter(Boolean);
+        // The empty list of bundle folders settings held before bundles went (item drop-bundle-source).
+        delete r.bundles;
         r.defaults = defaults.collect();
       });
       say("This machine's settings saved.");
@@ -1628,78 +1603,6 @@ function drawMachineSettings() {
       }
     }
   };
-}
-
-// The bundles
-
-async function renderBundles() {
-  try {
-    await Promise.all([loadSettings(), loadBundles()]);
-  } catch (error) {
-    failed(error);
-    return;
-  }
-  const box = $("bundles");
-  box.replaceChildren();
-  if (!state.bundles.length) box.append(h("p", { class: "note", text: "No bundles yet: add a bundle's folder in this machine's settings." }));
-  for (const bundle of state.bundles) {
-    box.append(h("div", { class: "card" },
-      h("div", { class: "head" }, h("strong", { text: bundle.name }),
-        h("button", { type: "button", class: "small", onclick: () => editBundle(bundle.name) }, "Edit")),
-      h("div", { class: "mono sub", text: bundle.folder }),
-      h("div", {}, "tracker ", h("span", { class: "mono", text: trackerText(bundle.tracker) })),
-      h("div", { class: "sub", text: `repositories ${bundle.repos.join(", ")}${bundle.places.length ? "; places " + bundle.places.join(", ") : ""}; ${bundle.systems ? "runs on " + bundle.systems.join(", ") : "runs on every system"}` })));
-  }
-}
-
-function editBundle(name) {
-  const kept = state.bundleRaw[name];
-  if (!kept) return;
-  const raw = copy(kept.bundle);
-  const root = h("div");
-  const server = h("input", { value: (raw.tracker || {}).server || "", placeholder: "alice/projects/<name>.os" });
-  const repos = h("input", { value: (raw.repos || []).join(", ") });
-  const places = h("input", { value: (raw.places || []).join(", ") });
-  const systems = ["windows", "macos", "linux"].map((s) => h("input", { type: "checkbox", value: s, checked: !raw.systems || raw.systems.includes(s) }));
-  const beneath = beneathOf([["the app", state.appDefaults], ["this machine", state.settings.defaults]]);
-  const settings = settingsEditor(raw.settings || {}, beneath);
-  root.append(
-    field("tracker", "The tracker's name on the Overseer server.", server, "tracker"),
-    field("repositories", "The project's names for its repositories, comma separated; sessions run in the first.", repos, "repos"),
-    field("places", "Folders the brief names that are not repositories, comma separated.", places, "places"),
-    field("systems", "The systems the project runs on.", h("span", { class: "group" }, systems.map((box) => h("label", { class: "group" }, box, box.value))), "systems"),
-    h("h3", { text: "Run settings for the project" }), settings.el);
-  const list = (input) => input.value.split(",").map((x) => x.trim()).filter(Boolean);
-  const body = {
-    el: root,
-    mark(f) {
-      markInputs(root, f);
-      settings.mark(f.replace(/^settings\./, ""));
-    },
-  };
-  openEditor(`The bundle ${name}`, body, async () => {
-    raw.tracker = { server: server.value.trim() };
-    raw.repos = list(repos);
-    if (list(places).length) raw.places = list(places);
-    else delete raw.places;
-    const chosen = systems.filter((b) => b.checked).map((b) => b.value);
-    if (chosen.length === 3) delete raw.systems;
-    else raw.systems = chosen;
-    raw.settings = settings.collect();
-    try {
-      const data = await api("PUT", `/api/bundles/${encodeURIComponent(name)}`, { version: kept.version, bundle: raw });
-      state.bundleRaw[name] = data;
-    } catch (error) {
-      if (error.status === 409) {
-        await loadBundles();
-        throw new ApiError(409, { error: "The bundle was changed since it was read; it is read again now: open it again." });
-      }
-      throw error;
-    }
-    say(`${name} saved.`);
-    renderBundles();
-    loadLoops().catch(failed);
-  });
 }
 
 // Starting the page

@@ -38,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--restart-loops", action="store_true",
                        help="first start again the loops cut off mid-run, as a container's are when it is stopped")
     run = sub.add_parser("run", help="run one loop in the terminal, as run-agent-loop.ps1 does")
-    run.add_argument("loop", help="the loop's name, in the settings; import-psd1 names it after its project")
+    run.add_argument("loop", help="the loop's name, in the settings; add names it after its project")
     run.add_argument("--model", help="every session on this model, at its default effort (model)")
     run.add_argument("--worker", help="this run on another worker of the settings: another Claude account")
     run.add_argument("--colour", choices=["auto", "always", "never"], default="auto",
@@ -103,81 +103,43 @@ def _parser() -> argparse.ArgumentParser:
     new.add_argument("--clone", action="store_true",
                      help="clone each repository the definition gives an address into its --repo path, when that "
                           "folder is missing or empty; one that is a clone of it already is used as it is")
-    # retarget, export-definition and import-psd1 are the bundles' way, which goes with item
-    # drop-bundle-source: they still work, but given no help, the command list does not name them.
-    ret = sub.add_parser("retarget")
-    ret.add_argument("loop", help="the loop's name, in the settings")
-    ret.add_argument("address", nargs="?",
-                     help="Overseer's address of the tracker, or its name there; the bundle's tracker.server when left out")
-    exp = sub.add_parser("export-definition")
-    exp.add_argument("bundle", type=Path, help="the bundle's folder, with project.json, brief.md and tools/")
-    exp.add_argument("--out", type=Path, required=True, help="an empty folder, laid out as the tracker's folder on the server")
-    exp.add_argument("--tracker-description", type=Path, metavar="FILE",
-                     help="a file holding the tracker's own description; read from the tracker through the worker's server when left out")
-    exp.add_argument("--worker", help="the worker whose server and key read the tracker's description; the default worker when left out")
-    imp = sub.add_parser("import-psd1")
+    imp = sub.add_parser("import-psd1", help="export a script's projects/<name>.psd1 as the definition and tools to put "
+                                              "beside its tracker, and say how to add its loop")
     imp.add_argument("file", type=Path, help="the .psd1, with its brief <name>.md and tools folder <name>/ beside it")
-    imp.add_argument("--replace", action="store_true", help="replace a bundle or loop of the same name")
-    imp.add_argument("--to", type=Path, help="the folder the bundle is made in, as <to>/<name>; the settings' bundles folder when left out")
+    imp.add_argument("--out", type=Path, required=True, help="an empty folder, laid out as the tracker's folder on the server")
+    imp.add_argument("--tracker-description", type=Path, metavar="FILE",
+                     help="a file holding the tracker's own description; read from the tracker with the .psd1's "
+                          "Server and KeyFile when left out")
     return parser
 
 
-def _export(args: argparse.Namespace) -> int:
-    """`agentloop export-definition` (item def-export): the files, then what is left to do."""
-    from agentloop import config, export
+def _import_psd1(args: argparse.Namespace) -> int:
+    """`agentloop import-psd1`: the export written (item def-export), then what is left to do - the
+    files put on the server, and the loop added from its tracker."""
+    from agentloop import config, psd1
 
-    server = None
     try:
-        # The settings only say which server the curl lines name, unless the description is read
-        # from it: a machine with none can still export with --tracker-description.
-        try:
-            settings = config.load_settings()
-        except config.ConfigError:
-            if args.tracker_description is None:
-                raise
-            settings = None
-        worker = None
-        if settings is not None:
-            worker = settings.worker(args.worker) if args.worker else settings.default_worker
-            if args.worker and worker is None:
-                raise config.ConfigError(settings.path.name, "workers", f'no worker named "{args.worker}"')
-        theirs = (worker.overseer if worker else None) or {}
-        server = theirs.get("server")
-        if args.tracker_description is not None:
-            description = args.tracker_description.read_text(encoding="utf-8")
-        else:
-            if not server or not theirs.get("keyFile"):
-                raise config.ConfigError("export-definition", "tracker-description",
-                                         "no worker here reaches a server: give the tracker's description with --tracker-description")
-            tracker = config.load_bundle(args.bundle).tracker.server
-            description = export.tracker_description(server, config.expand(theirs["keyFile"]), tracker)
-        report = export.export(args.bundle, args.out, description)
+        description = args.tracker_description.read_text(encoding="utf-8") if args.tracker_description else None
+        done = psd1.import_psd1(args.file, args.out, description)
     except config.ConfigError as error:
-        print(f"agentloop export-definition: {error}", file=sys.stderr)
+        print(f"agentloop import-psd1: {error}", file=sys.stderr)
         return 2
     except OSError as error:
-        print(f"agentloop export-definition: {type(error).__name__}: {error.strerror or error}", file=sys.stderr)
+        print(f"agentloop import-psd1: {type(error).__name__}: {error.strerror or error}", file=sys.stderr)
         return 2
+    report = done.report
     print(f"definition  {report.definition}")
     if report.tools:
         print(f"tools       {report.tools_dir} ({len(report.tools)})")
     print()
-    for line in report.steps(server):
+    for line in report.steps(done.converted.server):
         print(line)
-    return 0
-
-
-def _import_psd1(args: argparse.Namespace) -> int:
-    from agentloop import config, psd1
-
-    try:
-        done = psd1.import_psd1(args.file, replace=args.replace, to=args.to)
-    except config.ConfigError as error:
-        print(f"agentloop import-psd1: {error}", file=sys.stderr)
-        return 2
-    print(f"bundle  {done.bundle}")
-    print(f"worker  {done.worker}" + (" (new)" if done.worker_made else " (already there)"))
-    print(f"loop    {done.loop}")
+    print()
+    print("Then add its loop on this machine, from its tracker:")
+    print(f"  {done.add_line()}")
+    if done.converted.claude:
+        print(f"Its sessions ran on the account in {done.converted.claude}: add it as a worker "
+              f"(agentloop accounts add {done.converted.claude}) and give add its --worker.")
     return 0
 
 
@@ -495,28 +457,6 @@ def _add(args: argparse.Namespace) -> int:
     return 0
 
 
-def _retarget(args: argparse.Namespace) -> int:
-    """`retarget` (item retarget): a loop on a bundle moved to its tracker, as definition.retarget
-    does it. It asks nothing, so it runs the same without a terminal."""
-    from agentloop import config, definition
-
-    try:
-        done = definition.retarget(config.load_machine(), args.loop, args.address)
-    except definition.Unreachable as error:
-        print(f"agentloop retarget: the tracker's server: {error}", file=sys.stderr)
-        return 2
-    except config.ConfigError as error:
-        for problem in getattr(error, "problems", None) or [error]:
-            print(f"agentloop retarget: {problem.field}: {problem.message}" if problem.field else f"agentloop retarget: {problem}",
-                  file=sys.stderr)
-        return 2
-    print(f"loop    {', '.join(done['moved'])}  on {done['tracker']}")
-    print("bundle  dropped from bundles" if done["bundleDropped"] else "bundle  kept in bundles: another loop uses it")
-    if done["repoint"]:
-        print(f"Repoint these, which are in the bundle's folder: {', '.join(done['repoint'])}")
-    return 0
-
-
 def _approve_limit(args: argparse.Namespace) -> int:
     """`approve-limit` (item h87x): as the page's Go on past the limit."""
     from agentloop import accounts, config, usage
@@ -551,9 +491,6 @@ def _definition(args: argparse.Namespace) -> int:
         found = loop.find_loop(machine, args.loop)
     except (config.ConfigError, loop.LoopError) as error:
         print(f"agentloop {args.command}: {error}", file=sys.stderr)
-        return 2
-    if found.tracker is None:
-        print(f"agentloop {args.command}: {found.name} runs on the local bundle {found.project}, not on a definition", file=sys.stderr)
         return 2
     folder = loop.loop_dir(found.project, found.name)
     if args.command == "accept":
@@ -607,8 +544,6 @@ def main(argv: list[str] | None = None) -> int:
         return build.run(args.to)
     if args.command == "import-psd1":
         return _import_psd1(args)
-    if args.command == "export-definition":
-        return _export(args)
     if args.command == "run":
         return _run(args)
     if args.command == "setup":
@@ -631,8 +566,6 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     if args.command == "add":
         return _add(args)
-    if args.command == "retarget":
-        return _retarget(args)
     if args.command in ("show-definition", "accept"):
         return _definition(args)
     if args.command == "approve-limit":

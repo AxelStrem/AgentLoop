@@ -482,14 +482,14 @@ class Run:
                                                    "OVERSEER_KEY_FILE": str(key.resolve())}
 
         # The project: its definition read from the tracker, or the copy kept when the server
-        # cannot be reached (item doc-read), or a bundle on this PC.
+        # cannot be reached (item doc-read).
         self.loop_dir = loop_dir(self.project, loop.name)
         try:
             loaded = definition.project_for(machine, loop, self.loop_dir, worker=worker_name)
         except config.ConfigError as error:
             raise LoopError(str(error)) from None
-        bundle = loaded.project
-        assert bundle is not None
+        project = loaded.project
+        assert project is not None
         # What the run says first: that it starts from the copy, or on a changed definition, when
         # it does.
         self.definition_note = loaded.note
@@ -497,16 +497,16 @@ class Run:
         # and whether the server was away at the last one, so that it is said once.
         self.definition_tag = loaded.tag
         self.definition_away = False
-        self.bundle = bundle
+        self.project_def = project
         # What the project's setup script left for its sessions, once it has run or been read
         # (item project-setup); None while there is none.
         self.project_env: setup.SessionEnv | None = None
         self.overrides = {name: value for name, value in (overrides or {}).items() if value is not None}
-        self.settings = config.loop_settings(machine, loop, bundle)
+        self.settings = config.loop_settings(machine, loop, project)
         self.settings.update(self.overrides)
         try:
-            config.check_system(bundle)
-            placed = config.place_repos(loop, bundle)
+            config.check_system(project)
+            placed = config.place_repos(loop, project)
         except config.ConfigError as error:
             raise LoopError(str(error)) from None
         self.placed = placed
@@ -1218,35 +1218,25 @@ class Run:
     def _prepare(self) -> None:
         if self.definition_note:
             self.say(f" {self.definition_note}", "DarkYellow")
-        on_bundle = self.bundle.source == "bundle"
-        if on_bundle and not self.bundle.brief.is_file():
-            raise LoopError(f"No brief for {self.project} at {self.bundle.brief} - what the project is, its rules, how to check work on it.")
         self.loop_dir.mkdir(parents=True, exist_ok=True)
         # A replay's worktree a run that died, or was killed, left.
         sync.discard_all(self.repos, self.worktrees)
         self._write_system()
 
     def _write_system(self) -> None:
-        on_bundle = self.bundle.source == "bundle"
         # AUTOTASK.md and what the project is, copied once, so the whole run works to one version
         # of them, with this machine's folders in them - and again only when the run takes a
-        # changed definition (item doc-change). A project on a bundle is its tracker's
-        # description and its brief, as the script joins them; one read from its tracker is the
-        # definition's one description, and its tracker's is not asked for (item doc-read).
+        # changed definition (item doc-change). What the project is is the definition's one
+        # description; its tracker's is not asked for (item doc-read).
         folders, places = self.placed.folders, self.placed.places
-        if on_bundle:
-            described, brief = self._tracker_text("about"), session.read_text(self.bundle.brief)
-        else:
-            described, brief = self.bundle.description.replace("\r\n", "\n"), None
+        described = self.project_def.description.replace("\r\n", "\n")
         session.write_system_file(
-            self.system_file, session.autotask(), described, brief,
-            # A project read from its tracker has no bundle; its tools fetched from there, when it
-            # lists any, stand in for one (item tools-fetch).
-            where=session.where_you_are(self.bundle.folder or self.bundle.files, folders, places, self.bundle.about,
-                                        fetched=self.bundle.folder is None,
+            self.system_file, session.autotask(), described,
+            # The project's tools, fetched from its tracker when it lists any (item tools-fetch).
+            where=session.where_you_are(self.project_def.files, folders, places, self.project_def.about,
                                         project_env=setup.env_dir(self.project) if self.project_env is not None else None,
                                         brewfile=brew.brewfile(self.workdir) if brew.enabled() else None),
-            values=session.placeholders(self.bundle.folder or self.bundle.files, folders, places),
+            values=session.placeholders(self.project_def.files, folders, places),
         )
         session.write_session_settings(self.session_settings)
 
@@ -1292,7 +1282,7 @@ class Run:
             other = self.machine.settings.loop(name)
             if other is None:
                 continue
-            shared = [top for top in config.tops(other, self.bundle) if top in self.repos]
+            shared = [top for top in config.tops(other, self.project_def) if top in self.repos]
             if shared:
                 raise LoopError(f"The loop {name} is working {self.project} in {_slashes(shared[0])}, as this one would: "
                                 "each loop of a project needs clones of its own.")
@@ -1536,13 +1526,13 @@ class Run:
         when it has not run for this script, or last failed, or was asked to run again; and what it
         left for the sessions, read. None to go on; 1 when it failed, with the end of its output
         said, for the person to put right before the loop starts again."""
-        tool = config.setup_tool(self.bundle.raw) if self.bundle.source == "tracker" else None
-        if tool is None or self.bundle.files is None or self._setup_mode() == "off":
+        tool = config.setup_tool(self.project_def.raw)
+        if tool is None or self.project_def.files is None or self._setup_mode() == "off":
             if self.project_env is not None:
                 self.project_env = None
                 self._write_system()
             return None
-        script = self.bundle.files / "tools" / tool["file"]
+        script = self.project_def.files / "tools" / tool["file"]
         try:
             if setup.due(self.project, tool):
                 self.say(f" Setting up {self.project}'s tools: {tool['file']}, in {_slashes(setup.env_dir(self.project))}.", "Cyan")
@@ -1571,7 +1561,7 @@ class Run:
 
     def _setup_alone(self) -> int:
         """A run that sets the project up and ends: 0 when it is set up, or has nothing to set up."""
-        tool = config.setup_tool(self.bundle.raw) if self.bundle.source == "tracker" else None
+        tool = config.setup_tool(self.project_def.raw)
         if tool is None:
             self.say(f" {self.project}'s definition names no setup script for this system: nothing to set up.", "Green")
             return 0
@@ -1633,8 +1623,6 @@ class Run:
         accepted. None to go on; else the run's exit, as `_loop` ends with it. A server that
         cannot be reached is no change: the run goes on with what it has, and says so once."""
         tracker = self.loop.tracker
-        if tracker is None:
-            return None
         if read:
             server, key = str(self.overseer["server"]), config.expand(self.overseer["keyFile"])
             raw = None
@@ -1657,7 +1645,7 @@ class Run:
                 self.definition_away = False
                 self.definition_tag = tag
             if raw is not None:
-                if settled in ("changed", "first") and definition.version(raw) != self.bundle.version:
+                if settled in ("changed", "first") and definition.version(raw) != self.project_def.version:
                     self.say(f" {self.project}'s definition has changed, and this run goes on with the new one (acceptDefinition is auto). "
                              f"agentloop show-definition {self.loop.name} shows what changed.", "DarkYellow")
                     return self._take(raw)
@@ -1734,9 +1722,9 @@ class Run:
         its system prompt written again. A system the machine is not on stops the run, as
         `check_system` refuses a start; a repository or place the loop has no path for holds it,
         whatever acceptDefinition says, until the path is given in the loop's settings."""
-        bundle = definition.project(self.loop.tracker, raw, loop_dir=self.loop_dir)
+        project = definition.project(self.loop.tracker, raw, loop_dir=self.loop_dir)
         try:
-            config.check_system(bundle)
+            config.check_system(project)
         except config.ConfigError as error:
             self.say(f"{error}. Stopping.", "Red")
             return 1
@@ -1748,7 +1736,7 @@ class Run:
                 if found is None:
                     self.say(f"The loop {self.loop.name} is gone from the settings. Stopping.", "Red")
                     return 1
-                placed = config.place_repos(found, bundle)
+                placed = config.place_repos(found, project)
                 break
             except config.ConfigError as error:
                 if not told:
@@ -1759,8 +1747,8 @@ class Run:
                 return 0
             self.clock.sleep(usage.POLL_SECONDS)
         self.loop = found
-        self.bundle = bundle
-        self.settings = config.loop_settings(machine, found, bundle)
+        self.project_def = project
+        self.settings = config.loop_settings(machine, found, project)
         self.settings.update(self.overrides)
         self.placed = placed
         self.repos = placed.tops
@@ -1775,7 +1763,7 @@ class Run:
         and routed, and the system prompt and the prompt written to `dry/` in the loop's folder.
         No claude is run, nothing is committed or recorded, and the loop's lock is not taken:
         a loop of the project may be running, and its own system.md is left alone. The script
-        has nothing like it; it is for checking a loop's settings, and a bundle's brief, without
+        has nothing like it; it is for checking a loop's settings, and a project's description, without
         spending a session. 0 when both were written, 1 when there was no item to write them for."""
         dry = self.loop_dir / "dry"
         self.system_file = dry / "system.md"

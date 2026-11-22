@@ -83,6 +83,60 @@ def tracker_text(*items: str) -> str:
     ])
 
 
+# What test_loop's project says it is: the one description of the definition beside its tracker.
+BRIEF = "# The brief\n\nA project for tests."
+
+
+def definition_text(description: str = BRIEF, repos=(("code", ""),), places=(), systems: str = "",
+                    settings: str = "", tools=()) -> str:
+    """A definition document made from the library's template, as `<name>.project.os` holds it.
+    `repos` and `places` are (name, about), a repository optionally with its url and branch after
+    them; `tools` are (file, sha256, systems), and optionally whether it is the setup script, for
+    its Tools list, left out when there are none."""
+    def entries(pairs):
+        lines = []
+        for name, about, *more in pairs:
+            lines += ["        - {", f"            - name = {json.dumps(name)}"]
+            for field, value in zip(("about", "url", "branch"), (about, *more)):
+                if value:
+                    lines.append(f"            - {field} = {json.dumps(value)}")
+            lines.append("        }")
+        return lines
+    return "\n".join([
+        "<projects/project_definition.os/definition> definition {",
+        f"    - description = {json.dumps(description)}",
+        "    - Repos {", *entries(repos), "    }",
+        "    - Places {", *entries(places), "    }",
+        *(["    - Tools {", *[line for file, sha, on, *setup in tools for line in (
+            "        - {", f"            - file = {json.dumps(file)}", f"            - sha256 = {json.dumps(sha)}",
+            f"            - systems = {json.dumps(on)}", *(["            - setup = true"] if setup and setup[0] else []),
+            "        }")], "    }"] if tools else []),
+        f"    - systems = {json.dumps(systems)}",
+        f"    - settings = {json.dumps(settings)}",
+        "}",
+        "",
+    ])
+
+
+def served(overseer, *items: str, with_definition: bool = True, name: str = "proj", folder: str | None = None,
+           **definition_args) -> str:
+    """A tracker `<name>.os` that mounts `<name>.project.os` beside it, in a folder of its own on
+    the server unless given one: the tracker's name there."""
+    folder = folder or overseer.folder()
+    text = tracker_text(*items)
+    if with_definition:
+        text = text.replace('project (label="Proj") {\n',
+                            f'project (label="Proj") {{\n    - definition (source="{name}.project.os/definition", lazy=false)\n', 1)
+        overseer.document(definition_text(**definition_args), project=f"{name}.project", folder=folder)
+    return overseer.document(text, project=name, folder=folder)
+
+
+def redefine(overseer, tracker: str, **definition_args) -> None:
+    """The definition beside a tracker `served` made, written again."""
+    (overseer.root / (tracker[: -len(".os")] + ".project.os")).write_text(
+        definition_text(**definition_args), encoding="utf-8", newline="\n")
+
+
 class FakeClock(usage.Clock):
     def __init__(self, start: float | None = None):
         self.t = time.time() if start is None else start
@@ -97,8 +151,8 @@ class FakeClock(usage.Clock):
 
 
 class Project:
-    """A project on this test's PC: a code repository, its tracker on the test's server, a bundle, a
-    worker, a loop - and the scenes the fake claude plays."""
+    """A project on this test's PC: a code repository, its tracker on the test's server with its
+    definition beside it (`served`), a worker, a loop - and the scenes the fake claude plays."""
 
     def __init__(self, tmp_path: Path, monkeypatch, fake_claude, overseer, items: list[str], settings: dict | None = None):
         self.tmp = tmp_path
@@ -108,21 +162,16 @@ class Project:
         monkeypatch.setenv("AGENTLOOP_HOME", str(home))
         self.code = make_repo(tmp_path / "code", {"README.md": "code\n"})
         # The tracker's name on the server.
-        self.tracker = overseer.document(tracker_text(*items))
+        self.tracker = served(overseer, *items)
         self.account = tmp_path / "account"
         self.account.mkdir()
-        bundle = home / "config" / "bundles" / "proj"
-        bundle.mkdir(parents=True)
-        (bundle / "brief.md").write_text("# The brief\n", encoding="utf-8")
-        config.save_json(bundle / "project.json", {"format": 1, "name": "proj", "tracker": {"server": self.tracker},
-                                                   "repos": ["code"], "settings": {}})
         # The trial is off unless a test turns it on: its date is near enough to today to change
         # which way a medium item goes.
         self.settings = {"trial": None, **(settings or {})}
         config.save_json(home / "config" / "settings.json", {
-            "format": 1, "bundles": [str(bundle)],
+            "format": 1,
             "workers": [{"name": "w", "claude": str(self.account), "overseer": overseer.worker}],
-            "loops": [{"name": "proj", "project": "proj", "worker": "w",
+            "loops": [{"name": "proj", "tracker": self.tracker, "worker": "w",
                        "repos": {"code": str(self.code)}, "settings": self.settings}],
             "defaults": {},
         })
@@ -801,15 +850,6 @@ def test_a_second_loop_on_the_project_is_refused(project, fake_claude):
             r.run()
 
 
-def test_a_tracker_named_as_a_file_is_refused(project, fake_claude):
-    p = project(item("alpha"))
-    bundle = config.paths().config / "bundles" / "proj"
-    raw = json.loads((bundle / "project.json").read_text(encoding="utf-8"))
-    config.save_json(bundle / "project.json", {**raw, "tracker": {"repo": "code", "path": "proj.os"}})
-    with pytest.raises(config.ConfigError, match="trackers are kept only on an Overseer server"):
-        p.go()
-
-
 def test_a_worker_without_a_server_is_refused(project, fake_claude):
     p = project(item("alpha"))
     settings_file = config.paths().settings
@@ -959,7 +999,7 @@ def test_the_system_file_and_the_logs(project, fake_claude):
     p.go()
     system = p.r.system_file.read_text(encoding="utf-8")
     assert system.startswith(tools.path("AUTOTASK.md").read_text(encoding="utf-8")[:200])
-    assert "# What the project is, as its tracker describes it\n\nA project for tests.\n\n---\n\n# The brief\n" in system
+    assert system.endswith(f"# What the project is\n\n{BRIEF}\n")
     logs = sorted(p.r.log_dir.glob("loop-*-1-build.jsonl"))
     assert len(logs) == 1
     assert not p.r.state_file.exists()
@@ -971,12 +1011,10 @@ def test_the_system_file_says_where_the_session_is(project, fake_claude, monkeyp
     # An Overseer library named in settings written before the server handed out templates: let
     # be, and passed on no more - the session's tracker.py asks the server.
     monkeypatch.delenv("OVERSEER_LIBRARY", raising=False)
-    bundle = config.paths().config / "bundles" / "proj"
-    (bundle / "brief.md").write_text("# The brief\n\nRun `{bundle}/tools/check` in {code}, and {tool}/x, not {other}.\n", encoding="utf-8")
+    redefine(p.overseer, p.tracker, description="# The brief\n\nRun it in {code}, and {tool}/x, not {other}.",
+             places=(("tool", ""),))
     tool = p.tmp / "Program Files" / "tool"
     tool.mkdir(parents=True)
-    raw = json.loads((bundle / "project.json").read_text(encoding="utf-8"))
-    config.save_json(bundle / "project.json", {**raw, "places": ["tool"]})
     settings_file = config.paths().settings
     raw = json.loads(settings_file.read_text(encoding="utf-8"))
     raw["loops"][0]["places"] = {"tool": str(tool)}
@@ -989,7 +1027,7 @@ def test_the_system_file_says_where_the_session_is(project, fake_claude, monkeyp
     assert f"{session.python_command()} {slashed(tools.path('tracker.py').parent)}/tracker.py show <handle>" in system
     assert f"  - `code`: `{slashed(p.code)}`\n" in system
     assert f"  - `tool`: `{slashed(tool)}`" in system
-    assert f"Run `{slashed(bundle)}/tools/check` in {slashed(p.code)}, and {slashed(tool)}/x, not {{other}}." in system
+    assert f"Run it in {slashed(p.code)}, and {slashed(tool)}/x, not {{other}}." in system
     assert system.index("# Where you are") < system.index("# What the project is")
     assert "OVERSEER_LIBRARY" not in p.r.tracker_env
     assert p.fake.calls()[0]["env"].get("OVERSEER_LIBRARY") is None
@@ -997,13 +1035,11 @@ def test_the_system_file_says_where_the_session_is(project, fake_claude, monkeyp
 
 def test_a_project_is_refused_on_a_system_it_does_not_run_on(project, monkeypatch):
     p = project(item("alpha"))
-    bundle = config.paths().config / "bundles" / "proj"
-    raw = json.loads((bundle / "project.json").read_text(encoding="utf-8"))
     others = [s for s in config.SYSTEMS if s != config.this_system()]
-    config.save_json(bundle / "project.json", {**raw, "systems": others})
-    with pytest.raises(loop.LoopError, match=f"^proj/project.json: systems: proj runs on {', '.join(others)}, not on {config.this_system()}$"):
+    redefine(p.overseer, p.tracker, systems=", ".join(others))
+    with pytest.raises(loop.LoopError, match=f"^{p.tracker} definition: systems: proj runs on {', '.join(others)}, not on {config.this_system()}$"):
         p.run()
-    config.save_json(bundle / "project.json", {**raw, "systems": [config.this_system()]})
+    redefine(p.overseer, p.tracker, systems=config.this_system())
     p.run()
 
 

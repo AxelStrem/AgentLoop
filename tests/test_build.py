@@ -86,7 +86,7 @@ def test_the_copy_prints_its_version(source, tmp_path):
 
 def test_launcher_passes_arguments_through(source, tmp_path):
     built = build.build(tmp_path / "out dir", source / "src" / "agentloop")
-    done = _run(built.launcher, "import-psd1", "a file with spaces.psd1")
+    done = _run(built.launcher, "import-psd1", "a file with spaces.psd1", "--out", str(tmp_path / "export"))
     assert done.returncode == 2
     assert "a file with spaces.psd1" in done.stderr
 

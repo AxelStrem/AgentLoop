@@ -14,7 +14,6 @@
   <nav>
     <a href="#loops" data-view="loops">Loops</a>
     <a href="#machine" data-view="machine">This machine</a>
-    <a href="#bundles" data-view="bundles">Bundles</a>
   </nav>
 </header>
 <p id="message" class="message" role="status" hidden></p>
@@ -25,7 +24,6 @@
       <h2>Loops</h2>
       <span class="buttons-row">
         <button type="button" id="add-from-tracker">Add from a tracker</button>
-        <button type="button" id="add-loop">Add from a bundle</button>
       </span>
     </div>
     <table class="loops">
@@ -34,7 +32,7 @@
       </tr></thead>
       <tbody id="loops"></tbody>
     </table>
-    <p id="no-loops" class="note" hidden>No loops in this machine's settings yet: add one, on a bundle.</p>
+    <p id="no-loops" class="note" hidden>No loops in this machine's settings yet: add one from its tracker.</p>
 
     <div class="bar output-bar">
       <h2>Output</h2>
@@ -60,11 +58,6 @@
     <form id="machine-settings" class="fields"></form>
   </section>
 
-  <section id="view-bundles" class="view" hidden>
-    <div class="bar"><h2>Bundles</h2></div>
-    <p class="note">A bundle is a project as it is handed to someone: its brief, its tools and its settings. This machine's settings list the folders they are in.</p>
-    <div id="bundles"></div>
-  </section>
 </main>
 
 <dialog id="editor">

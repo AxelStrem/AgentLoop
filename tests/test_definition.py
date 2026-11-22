@@ -1,7 +1,6 @@
 """A project read from its tracker's address (item doc-read): the definition the tracker mounts,
 read over a served copy of overseer-server, checked, kept in the loop's folder for when the server
-cannot be reached, and given to a session as the one description in its system prompt. A local
-bundle goes on working beside it."""
+cannot be reached, and given to a session as the one description in its system prompt."""
 
 import json
 import socket
@@ -10,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from agentloop import config, definition, loop, session
+import test_loop
 from test_loop import Project, item, move, project, tracker_text  # noqa: F401 - project is a fixture
 
 DESCRIPTION = ("A made-up project for the tests.\n\n**Checking work.** `pytest` in `{code}`, "
@@ -19,45 +19,16 @@ DESCRIPTION = ("A made-up project for the tests.\n\n**Checking work.** `pytest` 
 def definition_text(description: str = DESCRIPTION, repos=(("code", "The code"), ("docs", "")),
                     places=(("samples", "Files to check against"),), systems: str = "windows, macos, linux",
                     settings: str = '{"chainUpTo": 1}', tools=()) -> str:
-    """A definition document made from the library's template, as `<name>.project.os` holds it.
-    `tools` are (file, sha256, systems), and optionally whether it is the setup script, for its
-    Tools list, left out when there are none."""
-    def entries(pairs):
-        # (name, about), and for a repository optionally its url and branch after them.
-        lines = []
-        for name, about, *more in pairs:
-            lines += ["        - {", f"            - name = {json.dumps(name)}"]
-            for field, value in zip(("about", "url", "branch"), (about, *more)):
-                if value:
-                    lines.append(f"            - {field} = {json.dumps(value)}")
-            lines.append("        }")
-        return lines
-    return "\n".join([
-        "<projects/project_definition.os/definition> definition {",
-        f"    - description = {json.dumps(description)}",
-        "    - Repos {", *entries(repos), "    }",
-        "    - Places {", *entries(places), "    }",
-        *(["    - Tools {", *[line for file, sha, on, *setup in tools for line in (
-            "        - {", f"            - file = {json.dumps(file)}", f"            - sha256 = {json.dumps(sha)}",
-            f"            - systems = {json.dumps(on)}", *(["            - setup = true"] if setup and setup[0] else []),
-            "        }")], "    }"] if tools else []),
-        f"    - systems = {json.dumps(systems)}",
-        f"    - settings = {json.dumps(settings)}",
-        "}",
-        "",
-    ])
+    """test_loop's definition document, with this file's project in it by default."""
+    return test_loop.definition_text(description, repos, places, systems, settings, tools)
 
 
 def served(overseer, *items: str, with_definition: bool = True, **definition_args) -> str:
-    """A tracker `proj.os` that mounts `proj.project.os` beside it, in a folder of its own on the
-    server: the tracker's name there."""
-    folder = overseer.folder()
-    text = tracker_text(*items)
-    if with_definition:
-        text = text.replace('project (label="Proj") {\n',
-                            'project (label="Proj") {\n    - definition (source="proj.project.os/definition", lazy=false)\n', 1)
-        overseer.document(definition_text(**definition_args), project="proj.project", folder=folder)
-    return overseer.document(text, project="proj", folder=folder)
+    """test_loop's tracker with its definition beside it, with this file's project in it by default."""
+    defaults = {"description": DESCRIPTION, "repos": (("code", "The code"), ("docs", "")),
+                "places": (("samples", "Files to check against"),), "systems": "windows, macos, linux",
+                "settings": '{"chainUpTo": 1}'}
+    return test_loop.served(overseer, *items, with_definition=with_definition, **{**defaults, **definition_args})
 
 
 def closed_port() -> str:
@@ -80,7 +51,7 @@ def test_the_definition_is_read_through_its_tracker(overseer):
         "settings": {"chainUpTo": 1},
     }
     found = definition.project(tracker, raw)
-    assert (found.name, found.source, found.folder, found.tracker.server) == ("proj", "tracker", None, tracker)
+    assert (found.name, found.tracker.server) == ("proj", tracker)
     assert found.repos == ["code", "docs"] and found.places == ["samples"]
     assert found.about == {"code": "The code", "samples": "Files to check against"}
     assert found.description == DESCRIPTION and found.settings == {"chainUpTo": 1}
@@ -130,11 +101,11 @@ def test_a_server_that_cannot_be_reached_is_unreachable_and_names_no_address(tmp
 # The settings
 
 def settings_with(loops: list[dict], tmp_path: Path) -> config.Settings:
-    return config.parse_settings({"format": 1, "bundles": [], "workers": [{"name": "w", "claude": None, "overseer": None}],
+    return config.parse_settings({"format": 1, "workers": [{"name": "w", "claude": None, "overseer": None}],
                                   "loops": loops}, tmp_path / "settings.json")
 
 
-def test_a_loop_names_a_tracker_in_place_of_a_project(tmp_path):
+def test_a_loop_names_its_tracker(tmp_path):
     settings = settings_with([{"name": "one", "tracker": "alice/projects/proj.os", "worker": "w"},
                               {"name": "two", "like": "one", "repos": {"code": "x"}}], tmp_path)
     one, two = settings.loops
@@ -143,10 +114,11 @@ def test_a_loop_names_a_tracker_in_place_of_a_project(tmp_path):
 
 
 @pytest.mark.parametrize("loop, field", [
-    ({"name": "one", "tracker": "alice/projects/proj.os", "project": "proj", "worker": "w"}, "loops[0].tracker"),
+    ({"name": "one", "tracker": "alice/projects/proj.os", "project": "proj", "worker": "w"}, "loops[0].project"),
+    ({"name": "one", "project": "proj", "worker": "w"}, "loops[0].project"),
     ({"name": "one", "tracker": "alice/projects/proj.txt", "worker": "w"}, "loops[0].tracker"),
     ({"name": "one", "tracker": "alice/projects/Big Name.os", "worker": "w"}, "loops[0].tracker"),
-    ({"name": "one", "worker": "w"}, "loops[0].project"),
+    ({"name": "one", "worker": "w"}, "loops[0].tracker"),
 ])
 def test_a_loop_tracker_that_is_wrong_is_refused(tmp_path, loop, field):
     with pytest.raises(config.ConfigError) as caught:
@@ -161,27 +133,16 @@ def test_a_copy_may_not_name_another_tracker(tmp_path):
     assert caught.value.field == "loops[1].tracker"
 
 
-def test_a_bundle_gives_what_each_repository_and_place_is(tmp_path):
-    folder = tmp_path / "proj"
-    folder.mkdir()
-    config.save_json(folder / "project.json", {
-        "format": 1, "name": "proj", "tracker": {"server": "a/proj.os"},
-        "repos": [{"name": "code", "about": "The code"}, "docs"], "places": [{"name": "samples"}]})
-    found = config.load_bundle(folder)
-    assert (found.repos, found.places, found.about) == (["code", "docs"], ["samples"], {"code": "The code"})
-    assert found.source == "bundle"
-
-
 # The system file
 
 def test_the_system_file_holds_the_one_description(tmp_path):
     code = tmp_path / "code"
     code.mkdir()
     where = session.where_you_are(None, {"code": code}, {}, {"code": "The code"})
-    assert "The project's bundle" not in where
+    assert "The project's tools" not in where
     assert f"  - `code`: `{str(code.resolve()).replace(chr(92), '/')}` - The code\n" in where
     values = session.placeholders(None, {"code": code}, {})
-    path = session.write_system_file(tmp_path / "system.md", "guide", "In {code}, not {bundle}.", None, where=where, values=values)
+    path = session.write_system_file(tmp_path / "system.md", "guide", "In {code}, not {bundle}.", where=where, values=values)
     text = path.read_text(encoding="utf-8")
     assert text.endswith(f"# What the project is\n\nIn {values['code']}, not {{bundle}}.\n")
     assert "as its tracker describes it" not in text
@@ -190,8 +151,8 @@ def test_the_system_file_holds_the_one_description(tmp_path):
 # The loop
 
 class TrackerProject(Project):
-    """test_loop's project, its loop reading the project from its tracker's definition instead of
-    the bundle."""
+    """test_loop's project, with this file's definition beside its tracker: two repositories and a
+    place."""
 
     def __init__(self, tmp_path, monkeypatch, fake_claude, overseer, items, **definition_args):
         super().__init__(tmp_path, monkeypatch, fake_claude, overseer, items)
@@ -201,7 +162,6 @@ class TrackerProject(Project):
         self.docs = self.code
         path = config.paths().settings
         raw = json.loads(path.read_text(encoding="utf-8"))
-        raw["bundles"] = []
         raw["loops"] = [{"name": "proj", "tracker": self.tracker, "worker": "w",
                          "repos": {"code": str(self.code), "docs": str(self.code)},
                          "places": {"samples": str(self.samples)}, "settings": self.settings}]
@@ -227,7 +187,7 @@ def test_a_loop_on_a_tracker_runs_on_its_definition(tracker_project, fake_claude
     p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"))
     assert p.go() == 0
     assert p.show("alpha")["stage"] == "testing"
-    assert p.r.bundle.source == "tracker" and p.r.settings["chainUpTo"] == 1
+    assert p.r.settings["chainUpTo"] == 1
     # The definition beside the tracker is no project beside it, for tracker.py or the prompt.
     assert p.r.beside() == []
     system = p.r.system_file.read_text(encoding="utf-8")
@@ -239,10 +199,10 @@ def test_a_loop_on_a_tracker_runs_on_its_definition(tracker_project, fake_claude
     assert "A project for tests." not in system
     assert f"  - `code`: `{slashed(p.code)}` - The code\n" in system
     assert f"  - `samples`: `{slashed(p.samples)}` - Files to check against" in system
-    assert "The project's bundle" not in system
+    assert "The project's tools" not in system
     kept = json.loads((p.r.loop_dir / definition.COPY).read_text(encoding="utf-8"))
     assert kept["tracker"] == p.tracker and kept["definition"]["description"] == DESCRIPTION
-    assert kept["version"] == p.r.bundle.version
+    assert kept["version"] == p.r.project_def.version
 
 
 def test_a_run_starts_from_the_copy_when_the_server_cannot_be_reached(tracker_project, fake_claude):
@@ -251,7 +211,7 @@ def test_a_run_starts_from_the_copy_when_the_server_cannot_be_reached(tracker_pr
     assert first.definition_note is None
     p.point_at(closed_port())
     r = p.run()
-    assert r.bundle.source == "tracker" and r.bundle.description == DESCRIPTION
+    assert r.project_def.description == DESCRIPTION
     assert "could not be read" in r.definition_note and "starts from the copy read" in r.definition_note
     assert "127.0.0.1" not in r.definition_note
     r._prepare()
@@ -275,13 +235,3 @@ def test_a_definition_that_fails_its_checks_stops_the_loop_even_with_a_copy(trac
     with pytest.raises(loop.LoopError) as caught:
         p.run()
     assert "settings.nope" in str(caught.value)
-
-
-def test_a_loop_on_a_local_bundle_still_runs(project, fake_claude):
-    p = project(item("alpha", "ready", complexity="low"))
-    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"))
-    assert p.go() == 0
-    assert p.r.bundle.source == "bundle"
-    assert not (p.r.loop_dir / definition.COPY).exists()
-    system = p.r.system_file.read_text(encoding="utf-8")
-    assert "# What the project is, as its tracker describes it\n\nA project for tests.\n\n---\n\n# The brief\n" in system

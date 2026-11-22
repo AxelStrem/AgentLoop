@@ -1,4 +1,6 @@
-"""Today's `projects/<name>.psd1` files: read, and converted into a bundle, a worker and a loop.
+"""Today's `projects/<name>.psd1` files: read, and exported as the definition document and tools
+that go beside the project's tracker on the server (item drop-bundle-source), with the line that
+then adds its loop on this machine.
 
 A PowerShell data file is a subset of PowerShell, and the parser reads only what the six files
 use: hashtables, arrays, strings, numbers, `$true`, `$false`, `$null` and comments. Anything
@@ -9,12 +11,11 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any, Callable
 
-from agentloop import config
+from agentloop import config, export
 from agentloop.config import ConfigError
 
 
@@ -222,11 +223,37 @@ _KEYS = {
 
 
 @dataclass
+class Converted:
+    """A .psd1 read: what its export is written from, and what adding its loop needs."""
+
+    source: export.Source
+    # The tracker's server, and the file holding the agents' key, as the .psd1 names them.
+    server: str
+    key_file: str
+    # Each repository's folder by its name, as the .psd1 places it (home-relative).
+    placed: dict[str, str]
+    # The Claude config folder its sessions ran on; None for the default account.
+    claude: str | None
+
+
+@dataclass
 class Imported:
-    bundle: Path
-    worker: str
-    worker_made: bool
-    loop: str
+    report: export.Report
+    converted: Converted
+
+    def add_line(self) -> str:
+        """The command that adds the project's loop on this machine, once the export is on the
+        server: `agentloop add`, with the .psd1's key file and repositories."""
+        c = self.converted
+        parts = ["agentloop", "add", _arg(f"{c.server.rstrip('/')}/doc/{c.source.tracker}"), "--key-file", _arg(c.key_file)]
+        for name, folder in c.placed.items():
+            parts += ["--repo", _arg(f"{name}={folder}")]
+        return " ".join(parts)
+
+
+def _arg(text: str) -> str:
+    """A command line's argument as a person copies it: quoted when it holds a space."""
+    return f'"{text}"' if " " in text else text
 
 
 def _slash(path: str) -> str:
@@ -242,9 +269,10 @@ def _same(a: Path, b: Path) -> bool:
     return os.path.normcase(str(a)) == os.path.normcase(str(b))
 
 
-def convert(path: Path, data: dict, top_of: Callable[[Path], Path | None] = config.repo_top) -> tuple[dict, dict, dict]:
-    """A .psd1's values as a bundle's project.json, a worker and a loop - the worker and loop not
-    yet named against any settings. As the start of run-agent-loop.ps1 reads them."""
+def convert(path: Path, data: dict, top_of: Callable[[Path], Path | None] = config.repo_top) -> Converted:
+    """A .psd1's values, as the start of run-agent-loop.ps1 reads them: the project its export is
+    written from - its brief `<name>.md` and tools folder `<name>/` beside it - and where its
+    repositories, its tracker and its account are."""
     where = path.name
     project = path.stem
     if not config.NAME.match(project):
@@ -293,8 +321,9 @@ def convert(path: Path, data: dict, top_of: Callable[[Path], Path | None] = conf
                           "put the tracker on the server, and name it and the server in the .psd1 (Tracker, Server, KeyFile)")
     if not config._text(values.get("KeyFile")):
         raise ConfigError(where, "KeyFile", "the tracker is on a server, and no file holding the agents' key is named")
-    tracker = {"server": _slash(tracker_value)}
-    overseer = {"server": str(server).rstrip("/"), "keyFile": config.home_relative(values["KeyFile"])}
+    tracker = _slash(tracker_value)
+    if config.tracker_project(tracker) is None:
+        raise ConfigError(where, "Tracker", f"{tracker} is not a tracker's name on the server, e.g. alice/projects/x.os")
 
     settings = {key: values[key] for key in ("routes", "escalation", "buildAfterTriage", "buildInTriageUpTo") if key in values}
     if "routes" in settings and isinstance(settings["routes"], dict):
@@ -304,8 +333,7 @@ def convert(path: Path, data: dict, top_of: Callable[[Path], Path | None] = conf
         settings["escalation"] = {k.lower(): v for k, v in settings["escalation"].items()}
     if isinstance(settings.get("buildAfterTriage"), str):
         settings["buildAfterTriage"] = [settings["buildAfterTriage"]]
-    bundle = {"format": config.FORMAT, "name": project, "tracker": tracker, "repos": names, "settings": settings}
-    config.check_bundle(bundle, where, project)
+    config.check_project({"repos": names, "settings": settings}, where)
 
     # Account: N is ~/.claude-accountN, nothing is 1, and the default ~/.claude is no folder at
     # all - the script's Account handling.
@@ -314,76 +342,24 @@ def convert(path: Path, data: dict, top_of: Callable[[Path], Path | None] = conf
     claude: str | None = f"~/.claude-account{account}" if re.fullmatch(r"\d+", account) else config.home_relative(account)
     if claude in ("~/.claude", "~/.claude/"):
         claude = None
-    worker = {"name": "", "claude": claude, "overseer": overseer}
-    loop = {"name": project, "project": project, "worker": "", "repos": placed, "settings": {}}
-    return bundle, worker, loop
+    brief = path.with_suffix(".md")
+    tools = path.parent / project
+    source = export.Source(name=project, tracker=tracker, repos=names, settings=settings,
+                           brief=brief.read_text(encoding="utf-8") if brief.is_file() else "",
+                           tools=tools if tools.is_dir() else None)
+    return Converted(source, str(server).rstrip("/"), config.home_relative(values["KeyFile"]), placed, claude)
 
 
-def _worker_name(claude: str | None, taken: set[str]) -> str:
-    if claude is None:
-        base = "default"
-    else:
-        base = PurePath(claude.rstrip("/")).name.lower()
-        base = re.sub(r"^\.claude-", "", base).lstrip(".")
-        base = re.sub(r"[^a-z0-9_-]", "-", base) or "worker"
-    name, n = base, 2
-    while name in taken:
-        name, n = f"{base}-{n}", n + 1
-    return name
-
-
-def import_psd1(path: Path, settings_path: Path | None = None, replace: bool = False,
-                top_of: Callable[[Path], Path | None] = config.repo_top, to: Path | None = None) -> Imported:
-    """One .psd1 made a bundle in `<config>/bundles/<name>`, or in `<to>/<name>` when given, with its
-    brief and tools, and a worker and a loop in this machine's settings. Everything is checked
-    before anything is written."""
-    settings_path = settings_path or config.paths().settings
-    bundle, worker, loop = convert(path, parse_file(path), top_of)
-    name = bundle["name"]
+def import_psd1(path: Path, out: Path, description: str | None = None,
+                top_of: Callable[[Path], Path | None] = config.repo_top) -> Imported:
+    """One .psd1 exported under `out`, which must be empty or missing: its definition, from its
+    brief beside it, and its tools. `description` is the tracker's own; when None it is read from
+    the server and with the key file the .psd1 names. Nothing is written to this machine's
+    settings: the loop is added from its tracker once the export is there (`Imported.add_line`)."""
+    converted = convert(path, parse_file(path), top_of)
     brief = path.with_suffix(".md")
     if not brief.is_file():
         raise ConfigError(path.name, "", f"no brief beside it, {brief.name}")
-    tools = path.parent / name
-
-    current = config.load_settings(settings_path)
-    raw = current.raw
-    folder = (to.resolve() if to else settings_path.parent / "bundles") / name
-    listed = [b for b in raw.setdefault("bundles", []) if config.expand(b).name == name]
-    others = [b for b in listed if not _same(config.expand(b), folder)]
-    if (others or folder.exists() or current.loop(name)) and not replace:
-        found = "a loop" if current.loop(name) else "a bundle"
-        raise ConfigError(settings_path.name, "", f'{found} named "{name}" is there already; --replace replaces it')
-
-    # The worker: one on the same Claude account is reused, given the server if it had none.
-    workers = raw.setdefault("workers", [])
-    match = next((w for w in workers if w.get("claude") == worker["claude"]
-                  and (w.get("overseer") is None or worker["overseer"] is None or w.get("overseer") == worker["overseer"])), None)
-    if match is not None:
-        if match.get("overseer") is None and worker["overseer"] is not None:
-            match["overseer"] = worker["overseer"]
-        worker_name, made = match["name"], False
-    else:
-        worker["name"] = _worker_name(worker["claude"], {w.get("name") for w in workers})
-        workers.append(worker)
-        worker_name, made = worker["name"], True
-    loop["worker"] = worker_name
-
-    loops = raw.setdefault("loops", [])
-    index = next((i for i, l in enumerate(loops) if l.get("name") == name), None)
-    if index is None:
-        loops.append(loop)
-    else:
-        loops[index] = loop
-    raw["bundles"] = [b for b in raw["bundles"] if b not in listed] + [config.home_relative(folder)]
-    config.parse_settings(raw, settings_path)
-
-    if folder.exists():
-        shutil.rmtree(folder)
-    folder.mkdir(parents=True)
-    config.save_bundle(folder, bundle)
-    shutil.copyfile(brief, folder / "brief.md")
-    if tools.is_dir():
-        # What Python leaves beside a tool it ran is this PC's, not the project's.
-        shutil.copytree(tools, folder / "tools", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    config.save_settings(raw, settings_path)
-    return Imported(folder, worker_name, made, name)
+    if description is None:
+        description = export.tracker_description(converted.server, config.expand(converted.key_file), converted.source.tracker)
+    return Imported(export.export(converted.source, out, description), converted)

@@ -2,8 +2,8 @@
 
 review-run.py was written for the script, which keeps its logs in `logs\\<project>` beside itself
 and names each project's tracker in `projects\\<project>.psd1`. The app keeps the logs in its data
-folder, `logs/<project>/` (item loop), and the tracker is the bundle's: a document on the server
-a worker reaches. So both are handed to it.
+folder, `logs/<project>/` (item loop), and the tracker is the one its loops read: a document on
+the server a worker reaches. So both are handed to it.
 
 Nothing runs a review but someone asking for one: no loop, session or route of the page starts it.
 """
@@ -32,9 +32,10 @@ def arguments(machine: config.Machine, project: str, loop_name: str | None = Non
     project's first loop: a loop says where its repositories are and which worker reaches the
     server. A project without its logs is refused; one whose tracker cannot be reached is reviewed
     without it, as review-run.py reviews a project its settings say no tracker for."""
-    # A project is a bundle's, or one a loop reads from its tracker (item doc-read).
-    bundle = machine.bundle(project)
-    known = set(machine.bundles) | {l.project for l in machine.settings.loops if l.tracker}
+    # A project is one a loop reads from its tracker (item doc-read), or one whose logs are here
+    # though no loop works it now: reviewed without its tracker.
+    logs = config.paths().data / "logs"
+    known = {l.project for l in machine.settings.loops} | ({d.name for d in logs.iterdir() if d.is_dir()} if logs.is_dir() else set())
     if project not in known:
         raise loop.LoopError(f"No project named {project}. The projects are: {', '.join(sorted(known)) or 'none'}")
     found = Arguments(logs=config.paths().data / "logs" / project)
@@ -55,9 +56,6 @@ def arguments(machine: config.Machine, project: str, loop_name: str | None = Non
     if key is None or not key.is_file():
         found.why_no_tracker = f"{project}'s tracker is on a server, and worker {chosen.worker} names no file holding the agents' key"
         return found
-    found.tracker = chosen.tracker or (bundle.tracker.server if bundle else None)
-    if found.tracker is None:
-        found.why_no_tracker = f"no bundle named {project} says where its tracker is"
-        return found
+    found.tracker = chosen.tracker
     found.env.update({"OVERSEER_URL": str(overseer["server"]).rstrip("/"), "OVERSEER_KEY_FILE": str(key.resolve())})
     return found

@@ -241,6 +241,24 @@ When the server or the key file is not the worker's, the loop carries them as it
 (below), and the page shows the server's host beside its project. The worker is still the Claude
 account it runs on.
 
+### A project of the script's
+
+A project of `run-agent-loop.ps1` is a `projects/<name>.psd1` with its brief `<name>.md` and its
+tools folder `<name>/` beside it. `agentloop import-psd1 <file> --out <folder>` writes it out as
+what goes beside its tracker: the definition `<name>.project.os` - the tracker's own description,
+then the brief, less its opening paragraph and its table of `{name}` rows, whose lines become each
+repository's and place's `about` - and its tools under `tools/<name>.project/`. The tracker's
+description is read with the `.psd1`'s `Server` and `KeyFile`, or given with
+`--tracker-description <file>`. It prints the steps left - putting the files on the server, the
+line that points the tracker's mount at the definition, sharing it with the agents to read only -
+and the `agentloop add` line that adds the loop once they are done, with the `.psd1`'s key file and
+repositories. It writes nothing to this machine's settings.
+
+There are no local bundles: a project is only ever read from its tracker (item
+`drop-bundle-source`). Settings that list `bundles`, or a loop that names a `project` in place of
+its `tracker`, are refused, saying so; the empty `bundles` list settings written earlier hold is
+let be, and dropped when the settings are next saved.
+
 
 ### Items for one bot
 

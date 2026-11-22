@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from agentloop import accounts, config, runner, server
+from agentloop import accounts, config, definition, runner, server
 from agentloop import loop as loop_mod
 
 from test_runner import Machine, move, write
@@ -66,7 +66,8 @@ def serve():
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    """A machine with no loops: a bundle, and a worker whose Overseer key file holds a key."""
+    """A machine with no loops: a worker whose Overseer key file holds a key, on a server nothing
+    listens on - the page never asks it (item doc-read)."""
     monkeypatch.setenv("AGENTLOOP_HOME", str(tmp_path / "home"))
     # accounts.found looks in the home folder.
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
@@ -74,22 +75,29 @@ def home(tmp_path, monkeypatch):
     (tmp_path / "user" / ".claude-account7").mkdir(parents=True)
     key = tmp_path / "agent.key"
     key.write_text(KEY, encoding="utf-8")
-    bundle = tmp_path / "home" / "config" / "bundles" / "proj"
-    bundle.mkdir(parents=True)
-    config.save_json(bundle / "project.json", {"format": 1, "name": "proj", "tracker": {"server": "alice/projects/proj.os"},
-                                               "repos": ["code"], "settings": {"repeatUpTo": 3}})
     account = tmp_path / "account"
     account.mkdir()
     config.save_json(config.paths().settings, {
-        "format": 1, "bundles": [str(bundle)],
+        "format": 1,
         "workers": [{"name": "w", "claude": str(account), "overseer": {"server": "http://127.0.0.1:1", "keyFile": str(key)}}],
         "loops": [], "defaults": {},
     })
     return tmp_path
 
 
+TRACKER = "alice/projects/proj.os"
+
+
 def loop_entry(name: str = "one", **more) -> dict:
-    return {"name": name, "project": "proj", "worker": "w", "repos": {"code": "~/code"}, "settings": {}, **more}
+    return {"name": name, "tracker": TRACKER, "worker": "w", "repos": {"code": "~/code"}, "settings": {}, **more}
+
+
+def define(name: str, repos=("code",), places=(), settings=None) -> None:
+    """The definition the loop `name` keeps of proj's, as if it had read it: what the page shows it
+    from, never asking the server."""
+    definition.keep(loop_mod.loop_dir("proj", name), TRACKER, {
+        "description": "Proj.", "repos": [{"name": r} for r in repos], "places": [{"name": p} for p in places],
+        "systems": None, "settings": {"repeatUpTo": 3} if settings is None else settings})
 
 
 # Who may reach it
@@ -372,7 +380,7 @@ def test_a_server_on_ipv6_loopback(home):
         s.close()
 
 
-# Settings, bundles and loops
+# Settings and loops
 
 def test_the_page_and_its_files_are_served(home, serve):
     c = serve()
@@ -395,6 +403,8 @@ def test_a_loop_says_what_it_is_missing(home, serve):
     code = home / "code"
     code.mkdir()
     subprocess.run(["git", "init", "-q", str(code)], check=True)
+    for name in ("placed", "unplaced", "nowhere", "keyless"):
+        define(name)
     placed = c.json("POST", "/api/loops", {"loop": loop_entry("placed", repos={"code": str(code)})})
     assert placed["missing"] == []
     unplaced = c.json("POST", "/api/loops", {"loop": loop_entry("unplaced", repos={})})
@@ -409,8 +419,10 @@ def test_a_loop_says_what_it_is_missing(home, serve):
     assert [m["field"] for m in keyless["missing"]] == ["worker"]
     # Judged as the loop judges it: the first of them is what a start is refused for.
     machine = config.load_machine()
+    unplaced = machine.settings.loop("unplaced")
+    project = definition.project_for(machine, unplaced, loop_mod.loop_dir("proj", "unplaced"), read=False).project
     with pytest.raises(config.ConfigError) as refused:
-        config.place_repos(machine.settings.loop("unplaced"), machine.bundles["proj"])
+        config.place_repos(unplaced, project)
     assert refused.value.field == "repos.code"
 
 
@@ -422,7 +434,8 @@ def test_a_loop_on_a_tracker_is_shown_from_the_definition_it_kept(home, serve):
     subprocess.run(["git", "init", "-q", str(code)], check=True)
     made = c.json("POST", "/api/loops", {"loop": {"name": "t", "tracker": "alice/projects/remote.os", "worker": "w",
                                                   "repos": {"code": str(code)}}})
-    assert (made["project"], made["source"], made["tracker"], made["definition"]) == ("remote", "tracker", {"server": "alice/projects/remote.os"}, None)
+    assert (made["project"], made["tracker"], made["definition"]) == ("remote", {"server": "alice/projects/remote.os"}, None)
+    assert "source" not in made
     assert made["missing"] == []
     from agentloop import definition, loop as loop_mod
     definition.keep(loop_mod.loop_dir("remote", "t"), "alice/projects/remote.os", {
@@ -432,8 +445,6 @@ def test_a_loop_on_a_tracker_is_shown_from_the_definition_it_kept(home, serve):
     assert shown["definition"] == {"repos": ["code", "docs"], "places": []} and shown["about"] == {"code": "The code"}
     assert shown["definitionRead"] == "2026-11-16T12:00:00+00:00" and shown["effective"]["repeatUpTo"] == 7
     assert [m["field"] for m in shown["missing"]] == ["repos.docs"]
-    bundled = c.json("POST", "/api/loops", {"loop": loop_entry("b", repos={"code": str(code)})})
-    assert bundled["source"] == "bundle" and bundled["definition"] is None
 
 
 def test_a_machine_set_up_from_nothing(tmp_path, monkeypatch, serve):
@@ -443,11 +454,6 @@ def test_a_machine_set_up_from_nothing(tmp_path, monkeypatch, serve):
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "user"))
     (tmp_path / "user" / ".claude-account1").mkdir(parents=True)
-    bundle = tmp_path / "handed" / "proj"
-    bundle.mkdir(parents=True)
-    config.save_json(bundle / "project.json", {"format": 1, "name": "proj", "tracker": {"server": "alice/projects/proj.os"},
-                                               "repos": ["code"], "places": ["tool"], "settings": {}})
-    (bundle / "brief.md").write_text("# The brief\n", encoding="utf-8")
     key = tmp_path / "agent.key"
     key.write_text(KEY, encoding="utf-8")
     code = tmp_path / "code"
@@ -456,23 +462,23 @@ def test_a_machine_set_up_from_nothing(tmp_path, monkeypatch, serve):
     assert not config.paths().settings.exists()
 
     c = serve()
-    assert c.json("GET", "/api/loops")["loops"] == [] and c.json("GET", "/api/bundles")["bundles"] == []
+    assert c.json("GET", "/api/loops")["loops"] == []
     assert c.json("GET", "/api/accounts")["found"] == [{"name": "account1", "claude": "~/.claude-account1"}]
     assert c.json("POST", "/api/accounts", {"claude": "~/.claude-account1"}) == {"added": "account1"}
     assert config.paths().settings.exists()
-    # The bundle's folder, and the worker's server and key file, as This machine changes them.
+    # The worker's server and key file, as This machine changes them.
     read = c.json("GET", "/api/settings")
     raw = read["settings"]
-    raw["bundles"] = [str(bundle)]
     raw["workers"][0]["overseer"] = {"server": "http://127.0.0.1:1", "keyFile": str(key)}
     c.json("PUT", "/api/settings", {"version": read["version"], "settings": raw})
-    assert [b["name"] for b in c.json("GET", "/api/bundles")["bundles"]] == ["proj"]
-    made = c.json("POST", "/api/loops", {"loop": {"name": "proj", "project": "proj", "worker": "account1",
+    # As if the loop had read its definition when it was added from its tracker.
+    define("proj", places=("tool",), settings={})
+    made = c.json("POST", "/api/loops", {"loop": {"name": "proj", "tracker": TRACKER, "worker": "account1",
                                                   "repos": {"code": str(code)}, "settings": {}}})
     assert [m["field"] for m in made["missing"]] == ["places.tool"]
     tool = tmp_path / "tool"
     tool.mkdir()
-    placed = c.json("PUT", "/api/loops/proj", {"loop": {**{k: made[k] for k in ("name", "project", "worker", "repos", "settings")},
+    placed = c.json("PUT", "/api/loops/proj", {"loop": {**{k: made[k] for k in ("name", "worker", "repos", "settings")}, "tracker": TRACKER,
                                                         "places": {"tool": str(tool)}}})
     assert placed["missing"] == []
     assert config.load_settings().loop("proj").places == {"tool": str(tool)}
@@ -486,15 +492,16 @@ def test_the_settings_come_with_the_apps_own(home, serve):
 def test_loops_made_changed_and_deleted(home, serve):
     c = serve()
     assert c.json("GET", "/api/loops")["loops"] == []
+    define("one")
     made = c.json("POST", "/api/loops", {"loop": loop_entry(settings={"model": "claude-sonnet-5-5"})})
     assert made["name"] == "one" and made["status"]["state"] == "stopped" and made["tracker"]["server"] == "alice/projects/proj.os"
-    # Effective: the bundle's repeatUpTo, the loop's model.
+    # Effective: the definition's repeatUpTo, the loop's model.
     assert made["effective"]["repeatUpTo"] == 3 and made["effective"]["model"] == "claude-sonnet-5-5"
 
     bad = c.json("POST", "/api/loops", {"loop": loop_entry("two", worker="nobody")}, expect=400)
     assert bad["field"] == "loops[1].worker"
     bad = c.json("POST", "/api/loops", {"loop": loop_entry("two", project="nothing")}, expect=400)
-    assert "no bundle named" in bad["error"]
+    assert bad["field"] == "loops[1].project" and "bundles are gone" in bad["error"]
     assert [l.name for l in config.load_settings().loops] == ["one"]
 
     changed = c.json("PUT", "/api/loops/one", {"loop": loop_entry(repos={"code": "~/elsewhere"})})
@@ -517,6 +524,8 @@ def test_the_auto_start_toggle(home, serve):
 
 def test_a_copy_of_a_loop_made_and_its_original_kept(home, serve):
     c = serve()
+    define("one")
+    define("two")
     c.json("POST", "/api/loops", {"loop": loop_entry(settings={"chainUpTo": 1})})
     made = c.json("POST", "/api/loops", {"loop": {"name": "two", "like": "one", "repos": {"code": "~/code-2"}}})
     assert (made["like"], made["project"], made["worker"], made["repos"]) == ("one", "proj", "w", {"code": "~/code-2"})
@@ -550,20 +559,6 @@ def test_the_settings_change_only_from_the_version_read(home, serve):
     raw["defaults"] = {"repeatUpTo": "many"}
     assert c.json("PUT", "/api/settings", {"version": done["version"], "settings": raw}, expect=400)["field"].startswith("defaults")
     assert config.load_settings().defaults == {"repeatUpTo": 5}
-
-
-def test_a_bundle_read_and_changed(home, serve):
-    c = serve()
-    assert [b["name"] for b in c.json("GET", "/api/bundles")["bundles"]] == ["proj"]
-    read = c.json("GET", "/api/bundles/proj")
-    raw = read["bundle"]
-    raw["settings"] = {"repeatUpTo": 9}
-    done = c.json("PUT", "/api/bundles/proj", {"version": read["version"], "bundle": raw})
-    assert done["bundle"]["settings"] == {"repeatUpTo": 9}
-    assert c.json("PUT", "/api/bundles/proj", {"version": read["version"], "bundle": raw}, expect=409)
-    raw["name"] = "other"
-    assert c.json("PUT", "/api/bundles/proj", {"version": done["version"], "bundle": raw}, expect=400)["field"] == "name"
-    assert c.json("GET", "/api/bundles/nope", expect=404)
 
 
 def test_the_accounts_say_how_each_signs_in_and_never_the_secret(home, serve, fake_claude, monkeypatch):
@@ -637,7 +632,7 @@ def test_going_on_past_a_workers_limit(home, serve, fake_claude):
 def test_no_answer_holds_the_key(home, serve, fake_claude):
     c = serve()
     c.json("POST", "/api/loops", {"loop": loop_entry()})
-    for path in ("/", "/api/loops", "/api/loops/one", "/api/settings", "/api/bundles", "/api/bundles/proj", "/api/accounts"):
+    for path in ("/", "/api/loops", "/api/loops/one", "/api/settings", "/api/accounts"):
         status, _, raw = c.request("GET", path)
         assert status == 200 and KEY.encode() not in raw, path
     # The key file is named, as a path.
