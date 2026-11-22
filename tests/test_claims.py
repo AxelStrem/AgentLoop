@@ -1,13 +1,17 @@
 """An item's owner, and the claim a loop holds on the item it works: tracker.py on the test's server,
 and the loop claiming and releasing around each session."""
 
+import importlib.util
 import json
 import os
 import re
+import sys
+import urllib.request
 
 import pytest
 
 from agentloop import loop
+from conftest import AGENT, AGENT_KEY, TRACKER_PY
 from test_loop import item, move, project, tracker_text  # noqa: F401 - project is a fixture
 
 
@@ -79,6 +83,55 @@ def test_a_claim_names_its_worker_and_a_release_takes_it_out(overseer, clean_env
     text = overseer.text(doc)
     assert "- working = true" in text and not NAMED.search(text)
     tracker(doc, "release", "beta")
+
+
+def template_has_worker_by(overseer) -> bool:
+    """Whether the template the server runs with has the `worker_by` field, which a claim's press
+    fills in with the account: an Overseer built before item worker-chip has none."""
+    probe = urllib.request.Request(f"{overseer.url}/v1/source?document=library:projects/project_template.os",
+                                   headers={"Authorization": f"Bearer {AGENT_KEY}"})
+    answer = json.loads(urllib.request.urlopen(probe, timeout=10).read().decode("utf-8"))
+    return "worker_by" in answer.get("text", "")
+
+
+def test_a_claim_records_the_account_and_a_release_takes_it_out(overseer, clean_env):
+    if not template_has_worker_by(overseer):
+        pytest.skip("the served template has no worker_by yet: build a newer Overseer")
+    doc = overseer.document(tracker_text(item("alpha", "ready", complexity="low")))
+    tracker = overseer.tracker
+
+    tracker(doc, "claim", "alpha", "--worker", "claude-opus-5-5 (medium)")
+    text = overseer.text(doc)
+    assert f'- worker_by = "{AGENT}"' in text and '- worker = "claude-opus-5-5 (medium)"' in text
+    tracker(doc, "release", "alpha")
+    text = overseer.text(doc)
+    assert not re.search(r'^\s*- worker_by = "[^"]+"$', text, re.M) and not NAMED.search(text)
+
+
+def test_a_release_succeeds_where_the_template_has_no_worker_by(overseer, clean_env, monkeypatch, capsys):
+    doc = overseer.document(tracker_text(item("alpha", "ready", complexity="low")))
+    tracker = overseer.tracker
+    tracker(doc, "claim", "alpha")
+    # Whatever the served template has, the write to worker_by is refused, as a template without the
+    # field refuses it.
+    spec = importlib.util.spec_from_file_location("tracker_under_test", TRACKER_PY)
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    real = tool.Tracker.set_field
+
+    def set_field(self, handle, name, value):
+        if name == "worker_by":
+            raise SystemExit("no such field")
+        return real(self, handle, name, value)
+
+    monkeypatch.setattr(tool.Tracker, "set_field", set_field)
+    for name, value in overseer.env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(sys, "argv", ["tracker.py", "--doc", doc, "release", "alpha"])
+    tool.main()
+    out, err = capsys.readouterr()
+    assert out.strip() == "alpha: released" and "worker_by" in err
+    assert "working = true" not in overseer.text(doc)
 
 
 def test_an_item_filed_is_its_source_items_owners(overseer, clean_env):
