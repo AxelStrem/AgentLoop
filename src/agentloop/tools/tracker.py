@@ -554,8 +554,22 @@ class Tracker:
                 return int(m.group(1))
         return None
 
+    def declares(self, name):
+        """Whether the template this tracker inherits declares a top-level list `name` - Items,
+        History, Labels, Features - so that a tracker writing no line of it still has it, empty.
+        A tracker holding the whole project, or a template without the list, does not."""
+        if not self.base():
+            return False
+        if not hasattr(self, '_base'):
+            self._base = self.base_tracker()
+        return self._base.header(name) is not None
+
     def entries(self, name):
-        """The entries of a top-level list, as (first line, last line, fields)."""
+        """The entries of a top-level list, as (first line, last line, fields). A list the tracker
+        has not written yet but its template declares - a new project's History or Labels - has
+        none; one declared nowhere stops, so a wrong name or document is not read as empty."""
+        if self.header(name) is None and self.declares(name):
+            return []
         start, end, _ = self.span(name)
         return [(i, j, self.fields(i, j)) for i, j in self.braces(start, end)]
 
@@ -1392,7 +1406,10 @@ def attach(t, args):
 
 def check(t, args):
     """Ask the server, which refuses any write that would not read back, for the open list."""
-    root = t.root_of(t.header('Items'))
+    # A tracker with no items yet writes no Items line; the server addresses the list the
+    # template declares from the document's root then, as append_entry does.
+    start = t.header('Items')
+    root = t.root() if start is None else t.root_of(start)
     listed = t.server.call('GET', '/v1/node', {'document': t.name, 'address': f'{root}/Items'})
     print(f'parses: the open list has {len(listed.get("child_addresses", []))} items')
 
