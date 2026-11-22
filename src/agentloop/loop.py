@@ -608,9 +608,9 @@ class Run:
         user's items first; every `next` goes through here so that the three cannot differ."""
         owner = ("--owner", self.worker.manager) if self.worker.manager else ()
         answer = self.read_tracker("next", *args, *owner)
-        # The account the loop signs in as, and the items tagged for other bots (item
-        # assign-bot), for the page to warn about a bot no loop here runs. Each answer replaces
-        # the last, so a tag taken off clears the warning. A dry run, whose status a run never
+        # The account the loop signs in as, and the items held for other accounts by a mention
+        # (item assign-bot), for the page to warn about a bot no loop here runs. Each answer
+        # replaces the last, so a mention taken back clears the warning. A dry run, whose status a run never
         # began, writes none.
         if answer is not None and self.status:
             self._status(account=answer.get("me"), others=answer.get("others") or [])

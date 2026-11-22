@@ -57,6 +57,9 @@ def tracker_text(*items: str) -> str:
         '<projects/project_template.os/project> project (label="Proj") {',
         '    - name = "Proj"',
         '    - description = "A project for tests."',
+        # The server's directory of people, mounted as a real tracker mounts it: the tests' trackers
+        # are two folders down from the root (Overseer.folder).
+        '    mount people (source="../../people.os/People", hidden=true, lazy=false, mutable=false) { }',
         "    - Items {",
         *items,
         "    }",
@@ -1086,13 +1089,13 @@ def test_figures_as_powershell_writes_them():
     assert loop.figure(0.0) == "0" and loop.figure(1.5) == "1.5" and loop.figure(round(0.3686, 2)) == "0.37" and loop.figure(12.0) == "12"
 
 
-# Bot tags (item assign-bot)
+# Mentions (item assign-bot)
 
 def test_items_for_other_bots_reach_the_status_for_the_page(project, fake_claude):
-    p = project(item("theirs", "ready", complexity="low", labels="bot-someone"))
+    p = project(item("theirs", "ready", complexity="low").replace('"The theirs item"', '"For @someone"'))
     assert p.go() == 0
     assert fake_claude.calls() == []
     assert "[QUEUE_EMPTY] - All actionable agent tasks have been fully cleared." in p.lines
     status = json.loads(p.r.status_file.read_text(encoding="utf-8"))
     assert status["account"] == "agent"
-    assert status["others"] == [{"handle": "theirs", "bots": ["someone"]}]
+    assert status["others"] == [{"handle": "theirs", "bots": ["someone"], "names": ["Some One"]}]

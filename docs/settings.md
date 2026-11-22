@@ -262,15 +262,35 @@ let be, and dropped when the settings are next saved.
 
 ### Items for one bot
 
-An item can be kept for particular bots with a project tag `bot-<username>`, where `<username>`
-is the Overseer account the bot's key signs in as (what `/account/me` answers, the name in the
-project's People). The owner adds one such tag to the tracker's Labels for each bot, then puts it
-on the items that bot should work. An item with bot tags is free only to the loops whose key signs
-in as one of those accounts. Other loops never take it, not even through a session's `NEXT:`, and
-their `tracker.py queue` lists it as `held for bot <names>`. An item with no bot tag is open to
-every loop, as before. A loop that sees items held for other bots writes them, with its own
-account, into its status. The page then marks its row with `N items for bots not run here` when
-no running loop on this machine, on the same tracker, signs in as any of those bots. A loop on
+An item is kept for particular bots by mentioning them: `@` and the Overseer account a bot's key
+signs in as, by its display name as the page shows it (its bold, colours and icons taken out, as
+Overseer's own `people::plain` does) or by its username, in any case. A display name may hold
+spaces, `@Zombo Bot`, and the longest name that fits is the one meant. A mention that runs on into a
+letter, a digit, `-` or `_` names no one, and neither does an `@` inside a word, as in an address.
+
+A mention counts in two places:
+
+- **The title**, anywhere in it. It holds until the title is edited.
+- **The end of the last comment not written by a loop**: the run of mentions it ends with, with
+  only spaces, commas and closing punctuation after them, as in `... rework it. @Zombo Bot` or
+  `@a, @b`. A mention in the middle of a comment does not count. A comment is a loop's when its
+  status names a model, as `tracker.py` signs every comment a session adds, so a bot's replies
+  never let go of an item. A person's later comment does: unless it ends with a mention too, the
+  item is open to every loop again.
+
+An item mentioning accounts is free only to the loops whose key signs in as one of them. Other loops
+never take it, not even through a session's `NEXT:`, and their `tracker.py queue` lists it as
+`held for <names>`. Any account can be mentioned, a person's too: an item ending with `@ap31` is
+then held for that person, and no loop takes it. An item mentioning no one is open to every loop.
+
+The names come from the server's directory of people, which a tracker mounts as `people` in its
+project (`mount people (source="../../people.os/People", ...)`), as the project template expects.
+A tracker that does not mount it knows only the loop's own account, by its username and display
+name. The directory is read only when some item holds an `@` where a mention would count. The
+`bot-<username>` tags of 0.1.8 mean nothing now.
+
+A loop that sees items held for other accounts writes them, with its own account, into its status. The page then marks its row with `N items for bots not run here` when
+no running loop on this machine, on the same tracker, signs in as any of those accounts. A loop on
 another machine may still run them, so this is a warning and nothing more.
 
 

@@ -101,8 +101,9 @@ class LoopStatus:
     error: str | None = None
     # Set when the project is being worked by something else: another loop on it, or the script.
     busy: str | None = None
-    # The Overseer account its key signs in as, once an item names a bot, and the items tagged
-    # for other bots, as {handle, bots} (item assign-bot).
+    # The Overseer account its key signs in as, once an item mentions one, and the items held for
+    # other accounts by their mentions, as {handle, bots, names}: usernames, and the display names
+    # the page shows them by (item assign-bot).
     account: str | None = None
     others: list | None = None
 

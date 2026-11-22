@@ -5,8 +5,9 @@
                                                the first of those, or the signal, as JSON - or the
                                                item preferred, if it is free to take; with --owner,
                                                that user's items come before everything flagged first;
-                                               an item tagged bot-<username> is only for the loops
-                                               whose key signs in as that account
+                                               an item mentioning an account (@<name>) in its
+                                               title, or at the end of its last comment not by a
+                                               loop, is only for the loops signed in as that account
     python tracker.py claim <handle> [--worker <name>]
                                                mark an item as an agent loop's to work - refused
                                                if another loop has it - as JSON, with the name of
@@ -158,6 +159,7 @@ class Server:
             sys.exit('OVERSEER_URL names a server, but OVERSEER_KEY_FILE names no file holding the key to reach it with')
         self._key = Path(key_file).read_text(encoding='utf-8').strip()
         self._me = None
+        self._people = None
 
     @classmethod
     def from_environment(cls):
@@ -286,13 +288,47 @@ class Server:
 
     def me(self):
         """The username the key acts as - who the comments it adds are by."""
+        return self.account()['username']
+
+    def account(self):
+        """The account the key acts as, as /account/me answers: its username and display name."""
         if self._me is None:
-            self._me = self.call('GET', '/account/me')['username']
+            self._me = self.call('GET', '/account/me')
         return self._me
+
+    def people(self, t):
+        """Everyone the server keeps an account for, as (username, display name): the directory it
+        writes at its root (overseer's people.rs), as tracker `t` mounts it - `mount people` in its
+        project, which is how a document reaches it; the document API names no file at the root.
+        Read once. A tracker that mounts none, or a server that keeps none, gives only the account
+        the key acts as: a mention of it still counts."""
+        if self._people is None:
+            found = []
+            try:
+                answer = self.call('GET', '/v1/node', {'document': t.name, 'address': f'{t.root()}/people/People'},
+                                   refusable=True)
+                for entry in (answer or {}).get('node', {}).get('children', []):
+                    said = {c.get('name'): written(c) for c in entry.get('children', [])}
+                    if said.get('tag'):
+                        found.append((said['tag'], said.get('name') or ''))
+            except (SystemExit, Refused, AttributeError):
+                found = []
+            me = self.account()
+            if not any(tag == me['username'] for tag, _ in found):
+                found.append((me['username'], me.get('name') or ''))
+            self._people = found
+        return self._people
 
     def bridge(self, name, command, args):
         """One of the page's own commands - the images, which the document API has no route for."""
         return self.call('POST', f'/api/{command}', None, {'document': name, 'args': args})
+
+
+def written(node):
+    """A string node's value as /v1/node answers it: what it works out to, where it is computed."""
+    given = node.get('parameters') or {}
+    value = given.get('_computed_value') or given.get('value') or {}
+    return value.get('String') if isinstance(value, dict) else None
 
 
 # How the server is to be told a field's value: its type, by the field's name in the templates;
@@ -756,15 +792,108 @@ def held(item):
     return [flag for flag in HELD if flagged(item, flag)]
 
 
-#: The prefix of a tag naming a bot an item is for (item assign-bot): `bot-<username>`, the
-#: username being the Overseer account a loop's key signs in as. The owner adds one to Labels for
-#: each bot; an item with any is free only to the loops of those accounts.
-BOT_TAG = 'bot-'
+#: What a mention ends at: a name followed by a letter, a digit, `-` or `_` is a longer name.
+NAME_GOES_ON = re.compile(r'[\w-]')
+
+#: What may stand between and after the mentions a comment ends with: spaces, commas and closing
+#: punctuation - `... rework it. @Zombo Bot`, `@a, @b.` (item assign-bot).
+TRAILING = set(' \t\r\n,.;:!?)]}\'"')
+
+ICON = re.compile(r'<icon=[^<>]*>')
+PUNCTUATION = set('!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~')
 
 
-def bots(item):
-    """The accounts an item is for, by its bot tags: empty when it is for any loop."""
-    return [l[len(BOT_TAG):] for l in split(item.get('labels')) if l.startswith(BOT_TAG) and len(l) > len(BOT_TAG)]
+def plain(name):
+    """A display name with its markup taken out, as Overseer's `people::plain` takes it out - the
+    two must agree, as a mention is of the name the page shows: `<color=... | x>` and
+    `<motion=... | x>` are `x`, a `<#key>` its key, an icon nothing, and the marks of bold, italic,
+    strikethrough and code go - an underscore only where it opens or closes a word."""
+    chars = ICON.sub(' ', name)
+    out, i = [], 0
+    while i < len(chars):
+        c = chars[i]
+        if c == '\\' and i + 1 < len(chars) and chars[i + 1] in PUNCTUATION:
+            out.append(chars[i + 1])
+            i += 2
+            continue
+        if c == '<':
+            end = chars.find('>', i)
+            if end >= 0:
+                tag = chars[i + 1:end]
+                taken = None
+                for prefix in ('color=', 'motion='):
+                    if tag.startswith(prefix):
+                        inner = tag[len(prefix):]
+                        taken = plain(inner[inner.index('|') + 1:]) if '|' in inner else None
+                        break
+                else:
+                    if tag.startswith('#'):
+                        taken = tag[1:]
+                if taken is not None:
+                    out.append(taken)
+                    i = end + 1
+                    continue
+        inside_a_word = 0 < i < len(chars) - 1 and chars[i - 1].isalnum() and chars[i + 1].isalnum()
+        if c in '*~`' or (c == '_' and not inside_a_word):
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return ' '.join(''.join(out).split())
+
+
+def mentions(text, people):
+    """The mentions in a text, in order, as (where the @ is, where the name ends, usernames): `@`
+    and an account's display name, plain, or its username, whatever the case. The longest name
+    that fits is the one meant - `@Zombo Bot` before `@Zombo` - and two accounts it names alike are
+    both meant. An @ inside a word - an address - is no mention."""
+    names = sorted({(n.lower(), tag) for tag, name in people for n in (tag, plain(name)) if n},
+                   key=lambda nt: -len(nt[0]))
+    found, low = [], text.lower()
+    for at in (m.start() for m in re.finditer('@', text)):
+        if at and NAME_GOES_ON.match(text[at - 1]):
+            continue
+        fits = [(n, tag) for n, tag in names if low.startswith(n, at + 1)
+                and not NAME_GOES_ON.match(text[at + 1 + len(n):at + 2 + len(n)] or ' ')]
+        if fits:
+            longest = len(fits[0][0])
+            found.append((at, at + 1 + longest, sorted({tag for n, tag in fits if len(n) == longest})))
+    return found
+
+
+def trailing(text, people):
+    """The accounts a text ends by mentioning: the run of mentions with nothing after them but
+    spaces, commas and closing punctuation. A mention in the middle of a text is not one."""
+    named, end = [], len(text)
+    found = mentions(text, people)
+    while True:
+        while end and text[end - 1] in TRAILING:
+            end -= 1
+        last = next((m for m in found if m[1] == end), None)
+        if not last:
+            return named
+        named += [tag for tag in last[2] if tag not in named]
+        end = last[0]
+
+
+def by_bot(comment):
+    """Whether a comment was written by a loop's session: tracker.py signs those with the model
+    as their status (`comment`). A person's has none."""
+    return bool(comment.get('status'))
+
+
+def last_said(t, top, bottom):
+    """The last comment on an item not written by a loop's session, or None."""
+    return next((c for c in reversed(t.nested(top, bottom, TALK)) if not by_bot(c)), None)
+
+
+def bots(item, said, people):
+    """The accounts an item is for (item assign-bot): those its title mentions, anywhere, and
+    those the last comment not by a loop ends by mentioning - `said`'s body. Empty when it is for
+    any loop. A later comment of a person's, mentioning no one at its end, hands it back to all."""
+    named = [tag for *_, tags in mentions(item.get('title', ''), people) for tag in tags]
+    named += trailing(said or '', people)
+    return list(dict.fromkeys(named))
 
 
 def claimed(item):
@@ -795,14 +924,23 @@ class Queue:
     then come before everything flagged first - owned and first, owned, others' first, the rest.
     The script has no manager, so without `owner` the order is exactly the script's.
 
-    An item tagged for bots (`bot-<username>`) is free only to a loop whose key signs in as one
-    of them; to any other it is held for those bots, in `others`, and is neither free nor taken
-    by `--prefer`. Who the loop is - `me` - is asked of the server only when an item names a bot."""
+    An item that mentions accounts - in its title, or at the end of its last comment not by a
+    loop (`bots`) - is free only to a loop whose key signs in as one of them; to any other it is
+    held for those accounts, in `others` as (stage, item, usernames), and is neither free nor taken
+    by `--prefer`. The server's directory, and who the loop is - `me` - are asked of it only when
+    some item holds an @ where a mention would count; `names` gives each username's plain display
+    name, for saying who an item is held for."""
 
     def __init__(self, t, owner=None):
         self.owner = owner
-        items = [f for _, _, f in t.items()]
-        self.me = t.server.me() if any(bots(f) for f in items) else None
+        entries = t.items()
+        items = [f for _, _, f in entries]
+        said = {id(f): (last_said(t, top, bottom) or {}).get('body', '') for top, bottom, f in entries}
+        maybe = any('@' in f.get('title', '') or '@' in said[id(f)] for f in items)
+        people = t.server.people(t) if maybe else []
+        named_by = {id(f): bots(f, said[id(f)], people) for f in items}
+        self.names = {tag: plain(name) or tag for tag, name in people}
+        self.me = t.server.me() if any(named_by.values()) else None
         open_handles = {f.get('handle') for f in items}
         holds = {h: sum(h in split(f.get('after')) for f in items) for h in open_handles}
         self.by_stage = {}
@@ -822,7 +960,7 @@ class Queue:
                     self.held.append((stage, f))
                 elif waits := waiting_on(t, f, items):
                     self.waiting.append((stage, f, waits))
-                elif (named := bots(f)) and self.me not in named:
+                elif (named := named_by[id(f)]) and self.me not in named:
                     self.others.append((stage, f, named))
                 else:
                     self.free.append((stage, f))
@@ -852,9 +990,10 @@ def queue(t, args):
     for stage, f in q.claimed:
         print(f'  claimed  {stage:8} {f["handle"]:16} an agent loop is working on it')
     for stage, f, named in q.others:
-        print(f'  for      {stage:8} {f["handle"]:16} held for bot {", ".join(named)}')
+        print(f'  for      {stage:8} {f["handle"]:16} held for {", ".join(q.names.get(n, n) for n in named)}')
     if q.me:
-        print(f'this loop signs in as {q.me}: items tagged {BOT_TAG}{q.me}, or with no bot tag, are its to take')
+        print(f'this loop signs in as {q.names.get(q.me, q.me)} ({q.me}): items mentioning it, '
+              'or no one, are its to take')
     print()
     if q.free:
         print('free to take, in the order a loop takes them ' +
@@ -883,7 +1022,8 @@ def next_item(t, args):
     # Who this loop is, and what is held for other bots, for the page to warn about an item
     # whose bot no loop runs: on the signal too, since a loop with nothing left is one to warn.
     bot = ({'me': q.me} if q.me else {}) | (
-        {'others': [{'handle': f['handle'], 'bots': named} for _, f, named in q.others]} if q.others else {})
+        {'others': [{'handle': f['handle'], 'bots': named, 'names': [q.names.get(n, n) for n in named]}
+                    for _, f, named in q.others]} if q.others else {})
     if q.signal:
         print(json.dumps({'signal': q.signal} | bot))
         return

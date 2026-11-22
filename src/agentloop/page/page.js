@@ -203,9 +203,10 @@ function workerOf(name) {
 
 // The loops
 
-// Items tagged for bots no running loop here signs in as (item assign-bot): each loop says the
-// account it is and what it saw held for other bots, and the page can only know this machine's
-// loops - a loop elsewhere may well run the bot.
+// Items held, by a mention, for accounts no running loop here signs in as (item assign-bot): each
+// loop says the account it is and what it saw held for others - by username, compared here, and
+// by display name, shown - and the page can only know this machine's loops: a loop elsewhere may
+// well run the bot.
 function unrunBots(loop) {
   const others = loop.status.others || [];
   if (!others.length) return [];
@@ -237,7 +238,7 @@ function renderLoops() {
     const unrun = unrunBots(loop);
     if (unrun.length) {
       stateCell.push(h("span", { class: "chip warn",
-        title: `Tagged for bots no running loop on this machine signs in as - a loop on another machine may run them:\n${unrun.map((o) => `${o.handle} (${o.bots.join(", ")})`).join("\n")}`,
+        title: `Mentioning accounts no running loop on this machine signs in as - a loop on another machine may run them:\n${unrun.map((o) => `${o.handle} (${(o.names || o.bots).join(", ")})`).join("\n")}`,
         text: `${unrun.length === 1 ? "1 item" : unrun.length + " items"} for bots not run here` }));
     }
     // The project's setup script (item project-setup): a failed run with the end of its output,
