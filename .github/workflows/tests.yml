@@ -80,10 +80,12 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
           echo "AGENTLOOP_OVERSEER_SERVER=$GITHUB_WORKSPACE/overseer/src-tauri/target/release/overseer-server$exe" >> "$GITHUB_ENV"
 
-      # -rs lists every skipped test and why, so a test that skipped where it should have run is
-      # seen in the log. A test still running after five minutes has hung: its stack is printed,
+      # -rsfE lists every skipped test and why, so a test that skipped where it should have run is
+      # seen in the log, and every failed or errored one too. Failed tests are also made
+      # annotations of the job (tests/conftest.py), which anyone can read through the API,
+      # where the log itself needs admin rights. A test still running after five minutes has hung: its stack is printed,
       # and the job's timeout ends the run.
       # On Windows too: each test process names the script's machine-wide mutexes for itself
       # (tests/conftest.py), so the tests' projects, which share one name, keep out of each other's way.
       - name: Run the tests
-        run: python -m pytest -q -rs -n auto -o faulthandler_timeout=300
+        run: python -m pytest -q -rsfE -n auto -o faulthandler_timeout=300

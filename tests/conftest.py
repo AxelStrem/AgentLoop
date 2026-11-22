@@ -23,6 +23,40 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     whole run waiting for it."""
     items.sort(key=lambda test: test.get_closest_marker("slow") is None)
 
+
+def github_error(title: str, message: str) -> str:
+    """A GitHub Actions `::error` workflow command, escaped as the runner wants: `%`, CR and LF in
+    the message, and `,` and `:` too in the title, which is a property."""
+
+    def escape(text: str) -> str:
+        return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+    prop = escape(title).replace(":", "%3A").replace(",", "%2C")
+    return f"::error title={prop}::{escape(message)}"
+
+
+def failure_message(report: pytest.TestReport, lines: int = 15) -> str:
+    """What a failed test's annotation says: the line it failed on and why, then the last lines
+    of its traceback, where the `E` lines are."""
+    crash = getattr(getattr(report, "longrepr", None), "reprcrash", None)
+    head = f"{crash.path}:{crash.lineno}: {crash.message}" if crash is not None else ""
+    tail = "\n".join(report.longreprtext.rstrip().splitlines()[-lines:])
+    return f"{head}\n\n{tail}" if head else tail
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """On GitHub Actions, each failed or errored test becomes an annotation of the job. A job's
+    log can only be downloaded with admin rights on the repository, but its annotations can be
+    read by anyone through the public API (`check-runs/<job>/annotations`), so an agent can find
+    out which test failed. GitHub shows at most ten errors a step; the log's own summary (-rfE)
+    lists the rest. Under xdist this runs on the controller, which has every worker's reports."""
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    stats = terminalreporter.stats
+    for report in stats.get("failed", []) + stats.get("error", []):
+        if getattr(report, "nodeid", None):
+            terminalreporter.write_line(github_error(report.nodeid, failure_message(report)))
+
 class FakeClaude:
     """The fake `claude` on PATH, and the record of what it was called with."""
 
