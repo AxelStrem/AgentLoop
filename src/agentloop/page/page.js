@@ -9,7 +9,7 @@
 
 // What each run setting does, in a line (docs/settings.md, "Run settings").
 const SETTINGS = {
-  routes: "The model and effort a session gets: a triage, and a build by its item's complexity.",
+  routes: "The model and effort a session gets: a triage, and a build by its item's complexity; voice is the call that cleans up a voice message's transcript.",
   escalation: "The route a build moves to once its route's model has had its go at the item.",
   buildAfterTriage: "The complexities a triage that leaves its item ready goes straight on to build, in the same session.",
   buildInTriageUpTo: "A triage goes on to build an item of this many points or fewer, whatever its complexity.",
@@ -25,9 +25,11 @@ const SETTINGS = {
   autoStartMinutes: "While it waits for work, how often to look for an item.",
   acceptDefinition: "When the project's definition changes: auto goes on with it at once, ask runs no more sessions until the change is accepted.",
   setup: "Run the setup script the project's definition names for this system before its sessions: auto runs it when it changes, off never does.",
+  transcribe: "The speech-to-text engine that transcribes voice messages before an item is taken, and its own keys as JSON; off leaves them for a loop that transcribes.",
 };
+const ENGINES = ["off", "whisper", "openai"];
 const COMPLEXITIES = ["trivial", "low", "medium", "high", "unassigned"];
-const ROUTE_KEYS = ["triage", ...COMPLEXITIES];
+const ROUTE_KEYS = ["triage", ...COMPLEXITIES, "voice"];
 const INTEGERS = ["buildInTriageUpTo", "chainUpTo", "repeatUpTo", "chainContextUpTo", "pushTries"];
 // The SGR codes colours.py writes, by the class the page draws each in.
 const SGR = {
@@ -141,6 +143,10 @@ function valueText(key, value) {
   if (key === "buildAfterTriage") return value.length ? value.join(", ") : "none";
   if (key === "push" || key === "autoStart") return value ? "on" : "off";
   if (key === "trial") return `until ${value.until}: ${value.complexity} up to ${value.upTo} points on ${routeText(value.route)}`;
+  if (key === "transcribe") {
+    const { engine, ...rest } = value;
+    return Object.keys(rest).length ? `${engine} ${JSON.stringify(rest)}` : String(engine);
+  }
   return String(value);
 }
 
@@ -241,6 +247,15 @@ function renderLoops() {
         title: `Mentioning accounts no running loop on this machine signs in as - a loop on another machine may run them:\n${unrun.map((o) => `${o.handle} (${(o.names || o.bots).join(", ")})`).join("\n")}`,
         text: `${unrun.length === 1 ? "1 item" : unrun.length + " items"} for bots not run here` }));
     }
+    // Items held until their voice messages are transcribed (item voice-loop): this loop does it
+    // before it takes an item, unless its transcription is off - then another loop must.
+    if (s.unheard) {
+      const off = s.transcribe === false;
+      stateCell.push(h("span", { class: "chip warn",
+        title: off ? "Set transcribe on this loop, or run one that has it, to have them transcribed" : "Transcribed before this loop takes its next item",
+        text: `${s.unheard === 1 ? "1 item waits for its voice messages" : s.unheard + " items wait for their voice messages"} to be transcribed${off ? " - transcription is off on this loop" : ""}` }));
+    }
+    if (s.voiceProblem) stateCell.push(h("span", { class: "problem", text: `voice message not transcribed: ${s.voiceProblem}` }));
     // The project's setup script (item project-setup): a failed run with the end of its output,
     // and one still to run said, for no session runs until it has succeeded.
     const setupState = (loop.setup || {}).state;
@@ -837,6 +852,22 @@ function settingRow(key, value, beneath) {
     inputs = [select];
     control.append(select);
     collect = () => select.value;
+  } else if (key === "transcribe") {
+    // The engine, and its own keys - which differ by engine (docs/voice.md) - as JSON.
+    const { engine, ...rest } = shown || { engine: "off" };
+    const select = h("select", { "aria-label": "engine" }, ENGINES.map((v) => h("option", { value: v, selected: v === (engine || "off") }, v)));
+    const keys = h("input", { value: Object.keys(rest).length ? JSON.stringify(rest) : "", placeholder: '{"model": "large-v3"}', "aria-label": "the engine's keys" });
+    inputs = [select, keys];
+    control.append(h("span", { class: "group" }, "engine", select), h("span", { class: "group" }, "keys", keys));
+    // Keys that are not a JSON object are sent as they are, for the server to refuse and say so.
+    collect = () => {
+      const text = keys.value.trim();
+      let more = {};
+      if (text) {
+        try { more = JSON.parse(text); } catch { more = text; }
+      }
+      return more && typeof more === "object" && !Array.isArray(more) ? { ...more, engine: select.value } : { engine: select.value, keys: more };
+    };
   } else if (key === "model") {
     const input = h("input", { value: shown || "", placeholder: "none: each route's own" });
     inputs = [input];

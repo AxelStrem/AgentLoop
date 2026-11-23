@@ -336,3 +336,13 @@ def test_a_repository_top_is_remembered_for_a_while(tmp_path, monkeypatch):
     assert runner.remembered_top(plain) is None
     tops[plain] = plain
     assert runner.remembered_top(plain) == plain
+
+
+def test_a_loops_voice_messages_reach_the_page(machine):
+    # What the loop says of voice messages (item voice-loop) is kept in its status for the page.
+    folder = machine.folder("a")
+    folder.mkdir(parents=True)
+    (folder / "status.json").write_text(json.dumps({"state": "stopped", "exit": 0, "transcribe": False, "unheard": 2,
+                                                    "voiceProblem": "voiced: no key"}), encoding="utf-8")
+    said = machine.runner.status("a").as_dict()
+    assert (said["transcribe"], said["unheard"], said["voiceProblem"]) == (False, 2, "voiced: no key")

@@ -28,6 +28,10 @@ this module puts them on the child's `PATH` or `LD_LIBRARY_PATH`, which Linux re
 process starts, and the run script adds the Windows ones with `os.add_dll_directory` as well.
 macOS has no CUDA: Whisper runs there on the CPU. `agentloop voice try <file>` transcribes one
 file, so the owner can check the setup.
+
+What the loop does with a transcript (item voice-loop) is here too: `cleanup_prompt`, the prompt
+of the one-turn call that makes it clear English instructions, and `transcript_text`, what is
+written under the recording.
 """
 
 from __future__ import annotations
@@ -279,3 +283,74 @@ def setup(model: str = WHISPER_MODEL, cpu: bool = False, dry_run: bool = False, 
     out("Done. The transcribe setting for this machine: " + json.dumps(setting))
     out("Try it on a recording: agentloop voice try <file>")
     return 0
+
+
+# What the loop does with a transcript (item voice-loop): a one-turn Claude call, on the `voice`
+# route, makes it clear English instructions, and that is what is written under the recording.
+
+CLEANUP_RULES = """\
+You turn a voice message into written instructions for the agents who work the items of a project's tracker. \
+A person recorded it in a comment on one of the items, and a speech-to-text engine wrote down what they said, \
+in the language they said it in. What you answer is written under the recording, for the agents and the people \
+of the project to read in its place.
+
+Write it as clear English instructions, in the speaker's own voice, as they would have written the comment:
+- A voice message is wordy. Leave out the filler, the false starts and what has nothing to do with the work; \
+say once what was said several times; and put the parts in an order that reads well, what belongs together together.
+- Leave out nothing that matters. Every request, decision, detail, condition, doubt and question stays - and so \
+do praise, thanks and comments on work already done, which tell the agents what to keep doing.
+- Add nothing the speaker did not say: no plan, no suggestion, no answer to their questions, and no guess at what \
+they meant where it is unclear - say that it is unclear.
+- Keep item handles, people's names, file names, commands and code words as they were said, code words in \
+backticks. An item named aloud by its handle is written <#handle>.
+- Never write an @ before a name: a mention decides who an item is for, and only the speaker may make one.
+- The engine may have misheard. Put right a word it plainly got wrong where the project, the item or the people \
+below make the right one clear.
+
+Answer with the text alone: no heading, no preamble, and no note on what you did."""
+
+
+def cleanup_prompt(*, description: str, handle: str, title: str, before: list[dict], comment: str,
+                   people: list[dict], heard: dict, author: str) -> str:
+    """The prompt of the call that cleans a transcript up: the rules, then what the speaker had in
+    front of them - the project, the item and its conversation up to the comment the recording is
+    in, and who may be named - then what the engine heard. `before` is the comments before that
+    one, as `show --json` gives them; `comment` is that one's own text, the recording and all."""
+    parts = [CLEANUP_RULES, "", "## The project", "", description.strip() or "(no description)", "",
+             f"## The item: {handle} - {title}", ""]
+    if before:
+        parts.append("Its conversation before the voice message, oldest first:")
+        for c in before:
+            parts += ["", f"--- {c.get('at', '')} {c.get('author', '')}", str(c.get("body") or "").strip()]
+    else:
+        parts.append("Nothing was said on it before the voice message.")
+    parts += ["", f"## The comment the recording is in, by {author}", "", comment.strip(), ""]
+    if people:
+        parts += ["## The people of the project's server (username: display name)", ""]
+        parts += [f"- {p.get('username')}: {p.get('name') or p.get('username')}" for p in people]
+        parts.append("")
+    language = heard.get("language") or "not said"
+    parts += [f"## The voice message, as the engine heard it (language: {language})", "", str(heard.get("text") or "").strip(), ""]
+    return "\n".join(parts)
+
+
+def is_english(heard: dict) -> bool:
+    """Whether a recording was spoken in English: as the engine says, or - when it does not say, as
+    gpt-4o-transcribe never does - when nearly every letter of the text is a Latin one."""
+    language = str(heard.get("language") or "").strip().lower()
+    if language:
+        return language in ("en", "english")
+    letters = [ch for ch in str(heard.get("text") or "") if ch.isalpha()]
+    return not letters or sum(ch.isascii() for ch in letters) >= 0.9 * len(letters)
+
+
+def transcript_text(english: str, heard: dict) -> str:
+    """What is written under a recording: the English instructions, and what was said word for word
+    after them when it was said in another language - the cleanup may have got something wrong, and
+    a reader who speaks it can check."""
+    text = english.strip()
+    if is_english(heard):
+        return text
+    language = str(heard.get("language") or "").strip()
+    said = str(heard.get("text") or "").strip()
+    return f"{text}\n\n*As it was said{f' ({language})' if language else ''}:* {said}"

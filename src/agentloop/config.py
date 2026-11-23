@@ -34,7 +34,9 @@ SYSTEMS = ("windows", "macos", "linux")
 RESERVED = ("tools", "bundle", "python")
 
 COMPLEXITIES = ("trivial", "low", "medium", "high", "unassigned")
-ROUTE_KEYS = ("triage", *COMPLEXITIES)
+# `voice` is no session on an item but the call that cleans up a voice message's transcript
+# (item voice-loop).
+ROUTE_KEYS = ("triage", *COMPLEXITIES, "voice")
 
 # The app's run settings: the script's values, as run-agent-loop.ps1 sets them and its parameters'
 # defaults. The trial's `until` is a date, compared as the script compares `[datetime]"2026-10-29"`.
@@ -46,6 +48,7 @@ DEFAULTS: dict[str, Any] = {
         "medium": {"model": "opus", "effort": "medium"},
         "high": {"model": "opus", "effort": "high"},
         "unassigned": {"model": "opus", "effort": "medium"},
+        "voice": {"model": "sonnet", "effort": "medium"},
     },
     "escalation": {"model": "opus", "effort": "medium"},
     "buildAfterTriage": ["medium", "high"],
@@ -70,6 +73,10 @@ DEFAULTS: dict[str, Any] = {
     # names for this system before its sessions, "off" never does - for a machine that has the
     # tools already. The machine's to say, as acceptDefinition is.
     "setup": "auto",
+    # Not the script's, which has no voice messages (item voice-loop): the speech-to-text engine
+    # that turns a recording in a comment into text before the loop takes an item, with that
+    # engine's own keys (voice.py). "off" never transcribes, and leaves such items held.
+    "transcribe": {"engine": "off"},
 }
 
 # Settings the app had once and has no more: still accepted where they were written - a machine's
@@ -84,6 +91,9 @@ ACCEPT_DEFINITION = ("auto", "ask")
 
 # What setup may be.
 SETUP = ("auto", "off")
+
+# What transcribe's engine may be: voice.ENGINES, or off.
+TRANSCRIBE_ENGINES = ("off", "whisper", "openai")
 
 
 class ConfigError(Exception):
@@ -242,6 +252,9 @@ def check_run_settings(where: str, field: str, settings: Any) -> None:
         elif key == "setup":
             if value not in SETUP:
                 raise ConfigError(where, at, " or ".join(f'"{v}"' for v in SETUP))
+        elif key == "transcribe":
+            if not isinstance(value, dict) or value.get("engine") not in TRANSCRIBE_ENGINES:
+                raise ConfigError(where, at, '{"engine": ' + " | ".join(f'"{v}"' for v in TRANSCRIBE_ENGINES) + ", ...the engine's own keys}")
         elif key in ("push", "autoStart"):
             if not isinstance(value, bool):
                 raise ConfigError(where, at, "true or false")

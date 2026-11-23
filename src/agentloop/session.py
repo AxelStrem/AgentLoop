@@ -306,9 +306,20 @@ class Route:
     effort: str | None = None
 
 
-def command_line(claude: str, session_id: str, route: Route, *, settings: Path, system_file: Path, resume: bool) -> list[str]:
+def command_line(claude: str, session_id: str, route: Route, *, settings: Path | None, system_file: Path | None, resume: bool,
+                 one_turn: bool = False) -> list[str]:
     """claude's arguments, as `Invoke-Session` builds them. stream-json, which needs --verbose,
-    emits each message as it happens, one JSON object per line. The prompt goes in on stdin."""
+    emits each message as it happens, one JSON object per line. The prompt goes in on stdin.
+
+    `one_turn` is a call that only answers - the cleanup of a voice message's transcript (item
+    voice-loop): no tools at all, one turn, and none of a session's guide, brief or guard hook,
+    since it can do nothing they are about."""
+    if one_turn:
+        argv = [claude, "-p", "--output-format", "stream-json", "--verbose", "--model", route.model,
+                "--tools", "", "--max-turns", "1", "--session-id", session_id]
+        if route.effort:
+            argv += ["--effort", route.effort]
+        return argv
     argv = [
         claude, "-p", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose",
         "--settings", str(settings), "--model", route.model,
@@ -495,13 +506,15 @@ class SessionSpec:
     prompt: str
     route: Route
     workdir: Path
-    system_file: Path
-    settings: Path
+    system_file: Path | None
+    settings: Path | None
     log: Path
     variables: dict[str, str | None]
     # For a kill: running.json, and the item it names.
     state_file: Path | None = None
     item: str | None = None
+    # A call that only answers, with no tools (`command_line`).
+    one_turn: bool = False
 
 
 def _popen_options() -> dict:
@@ -518,7 +531,8 @@ def run_session(spec: SessionSpec, on_event: Callable[[Event], None] | None = No
     it runs, for whoever may have to end it."""
     reader = StreamReader(on_event)
     env = build_env(spec.variables)
-    argv = command_line(spec.claude, spec.session_id, spec.route, settings=spec.settings, system_file=spec.system_file, resume=spec.resume)
+    argv = command_line(spec.claude, spec.session_id, spec.route, settings=spec.settings, system_file=spec.system_file, resume=spec.resume,
+                        one_turn=spec.one_turn)
     spec.log.parent.mkdir(parents=True, exist_ok=True)
     # stderr is left alone: it goes where the app's own goes.
     process = subprocess.Popen(argv, cwd=spec.workdir, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, **_popen_options())

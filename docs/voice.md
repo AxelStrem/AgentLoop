@@ -16,6 +16,37 @@ There are two engines:
 **Privacy:** with `openai`, every voice message is sent to OpenAI. With `whisper`, nothing leaves
 the machine except the model's download, made once during setup.
 
+## What a loop does with them
+
+A comment holding a recording keeps its item back - unheard, whoever it is for - until the
+recording is transcribed (`tracker.py sounds` lists those recordings, `next` names their items in
+`unheard`). A loop whose `transcribe` setting names an engine transcribes them before it takes an
+item, and again while it waits for work with `autoStart` on, once the tracker changes:
+
+1. `tracker.py sounds --fetch` fetches the recordings into the loop's folder.
+2. The engine turns each one into text, in the language it was spoken in.
+3. A one-turn Claude call with no tools, on the `voice` route (sonnet/medium unless the settings
+   say otherwise), is given the project's description, the item and its conversation up to that
+   comment, the people the server knows, and the raw text. It writes clear English instructions:
+   it leaves out filler and repeats, and puts the parts in order. It keeps everything that matters,
+   praise and comments on earlier work included. It adds nothing, keeps handles and names as they
+   were said, and writes no @mention.
+4. `tracker.py heard` writes that text under the recording. When the language is not English,
+   what was said word for word follows it. When the engine does not name the language, as
+   `gpt-4o-transcribe` never does, a text that is nearly all Latin letters counts as English.
+5. The loop's output says so, and the item gets a work record of kind `voice` with the call's
+   model and cost, which shows in Stats.
+
+Transcribing is not working the item: it is not claimed, moved or committed. Once its recordings
+are transcribed, the item is free to whichever loop it is for, this one or another. When something
+fails (the engine is not set up, its key is missing, the cleanup call fails), the loop says so
+once, in its output and in its row on the page. It leaves that item's recordings for the rest of
+the run and goes on with the others. A usage limit leaves them until the limit is waited out.
+
+With `transcribe` off, the default, a loop never transcribes. Unheard items stay held, for a
+loop on another machine to transcribe. The page's row for the loop then says how many items wait,
+and that transcription is off on it.
+
 ## Local Whisper
 
 Whisper runs through [faster-whisper](https://github.com/SYSTRAN/faster-whisper) in a Python

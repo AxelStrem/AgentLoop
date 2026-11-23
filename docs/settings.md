@@ -487,7 +487,7 @@ One set of keys, wherever they are written:
 
 | key | default | the script's |
 | --- | --- | --- |
-| `routes` | `triage` opus/medium, `trivial` sonnet/medium, `low` sonnet/high, `medium` opus/medium, `high` opus/high, `unassigned` opus/medium | `$Routes` |
+| `routes` | `triage` opus/medium, `trivial` sonnet/medium, `low` sonnet/high, `medium` opus/medium, `high` opus/high, `unassigned` opus/medium, `voice` sonnet/medium | `$Routes`; `voice` is not the script's |
 | `escalation` | opus/medium | `$Escalation` |
 | `buildAfterTriage` | `["medium", "high"]` | `$BuildAfterTriage` |
 | `buildInTriageUpTo` | `2` | `$BuildInTriageUpTo` |
@@ -503,8 +503,10 @@ One set of keys, wherever they are written:
 | `autoStartMinutes` | `10` | none |
 | `acceptDefinition` | `"auto"`; or `"ask"`. Not in a project's settings | none: see "When the definition changes" |
 | `setup` | `"auto"`; or `"off"`. Not in a project's settings | none: see "Its setup script" |
+| `transcribe` | `{"engine": "off"}`; or `"whisper"` or `"openai"`, with that engine's own keys | none: see [voice.md](voice.md) |
 
-A route is `{"model": "opus", "effort": "medium"}`.
+A route is `{"model": "opus", "effort": "medium"}`. The `voice` route is not a session's: it is the
+one-turn call that cleans up a voice message's transcript (see [voice.md](voice.md)).
 
 A run has no limit on how many items it works, and items flagged `asked` never stop it, however
 many there are (item no-limits): it goes on until nothing on its tracker can be worked, or a stop,

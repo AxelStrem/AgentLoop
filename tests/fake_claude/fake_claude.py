@@ -64,7 +64,7 @@ TRACKER = Path(__file__).resolve().parents[2] / "src" / "agentloop" / "tools" / 
 # Options of claude that take a value, so that the argument after one is not taken for the prompt.
 _WITH_VALUE = {
     "--model", "--effort", "--settings", "--session-id", "--resume", "--append-system-prompt-file",
-    "--output-format", "--max-turns",
+    "--output-format", "--max-turns", "--tools",
 }
 
 _ALWAYS_RECORDED = ("CLAUDE_CONFIG_DIR", "OVERSEER_TRACKER", "OVERSEER_ITEM")

@@ -106,6 +106,11 @@ class LoopStatus:
     # the page shows them by (item assign-bot).
     account: str | None = None
     others: list | None = None
+    # Voice messages (item voice-loop): whether this loop transcribes them, how many items wait for
+    # theirs, and why the last that could not be transcribed was not.
+    transcribe: bool | None = None
+    unheard: int = 0
+    voiceProblem: str | None = None
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
