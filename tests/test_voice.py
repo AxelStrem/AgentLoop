@@ -35,6 +35,11 @@ class WhisperModel:
         self.args = (model, device, compute_type, download_root)
 
     def transcribe(self, file, language=None, beam_size=5, vad_filter=False):
+        # As faster-whisper 1.2.1's decode_audio opens every recording (item metadata-errors).
+        import av
+
+        with av.open(file, mode="r", metadata_errors="ignore"):
+            pass
         said = Path(file).read_text(encoding="utf-8")
         if said == "FAIL":
             raise RuntimeError("the recording could not be decoded")
@@ -50,6 +55,17 @@ class WhisperModel:
 def download_model(model, cache_dir=None):
     Path(cache_dir, model).mkdir(parents=True, exist_ok=True)
     return str(Path(cache_dir, model))
+'''
+
+# PyAV as it is now: `open` no longer takes `metadata_errors` (item metadata-errors).
+FAKE_AV = '''
+import contextlib
+
+
+def open(file, mode="r", **options):
+    if "metadata_errors" in options:
+        raise TypeError("open() got an unexpected keyword argument 'metadata_errors'")
+    return contextlib.nullcontext(file)
 '''
 
 FAKE_CTRANSLATE2 = '''
@@ -76,6 +92,7 @@ def whisper_home(tmp_path_factory):
         (site / "faster_whisper").mkdir()
         (site / "faster_whisper" / "__init__.py").write_text(FAKE_FASTER_WHISPER, encoding="utf-8")
         (site / "ctranslate2.py").write_text(FAKE_CTRANSLATE2, encoding="utf-8")
+        (site / "av.py").write_text(FAKE_AV, encoding="utf-8")
         yield home, site
 
 
@@ -142,6 +159,61 @@ def test_the_download_step_puts_the_model_in_the_models_folder(home):
     done = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert (voice.models_dir() / "small").is_dir()
+
+
+def _run_script_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("whisper_run", voice.run_script())
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fake_av(monkeypatch, open_):
+    import types
+
+    av = types.ModuleType("av")
+    av.open = open_
+    monkeypatch.setitem(sys.modules, "av", av)
+    return av
+
+
+def test_pyav_without_metadata_errors_is_opened_without_it(monkeypatch):
+    calls = []
+
+    def open_(file, mode="r", **options):
+        calls.append(options)
+        if "metadata_errors" in options:
+            raise TypeError("open() got an unexpected keyword argument 'metadata_errors'")
+        return file
+
+    av = _fake_av(monkeypatch, open_)
+    script = _run_script_module()
+    script.tolerate_av_metadata_errors()
+    script.tolerate_av_metadata_errors()  # a second call wraps nothing twice
+    assert av.open("memo.webm", mode="r", metadata_errors="ignore") == "memo.webm"
+    assert calls == [{"metadata_errors": "ignore"}, {}]
+
+
+def test_pyav_that_takes_metadata_errors_gets_it(monkeypatch):
+    calls = []
+    av = _fake_av(monkeypatch, lambda file, mode="r", **options: calls.append(options) or file)
+    _run_script_module().tolerate_av_metadata_errors()
+    assert av.open("memo.webm", metadata_errors="ignore") == "memo.webm"
+    assert calls == [{"metadata_errors": "ignore"}]
+
+
+def test_other_type_errors_from_pyav_are_not_swallowed(monkeypatch):
+    def open_(file, mode="r", **options):
+        raise TypeError("open() got an unexpected keyword argument 'options'")
+
+    av = _fake_av(monkeypatch, open_)
+    _run_script_module().tolerate_av_metadata_errors()
+    with pytest.raises(TypeError, match="'options'"):
+        av.open("memo.webm", options={}, metadata_errors="ignore")
+    with pytest.raises(TypeError, match="'options'"):
+        av.open("memo.webm", options={})
 
 
 def test_an_unknown_engine_is_refused(tmp_path):

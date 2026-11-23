@@ -29,6 +29,30 @@ def add_cuda_dlls() -> None:
         os.environ["PATH"] = str(folder) + os.pathsep + os.environ.get("PATH", "")
 
 
+def tolerate_av_metadata_errors() -> None:
+    """faster-whisper (1.2.1) opens every recording with `av.open(..., metadata_errors="ignore")`,
+    a keyword PyAV no longer takes: newer PyAV refuses it with a TypeError and nothing is
+    transcribed. Where PyAV refuses it, the call is made again without it; where PyAV still takes
+    it, nothing changes. It can go once faster-whisper stops passing the keyword."""
+    import av
+
+    original = av.open
+    if getattr(original, "_tolerates_metadata_errors", False):
+        return
+
+    def open_(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except TypeError as error:
+            if "metadata_errors" not in kwargs or "metadata_errors" not in str(error):
+                raise
+            kwargs.pop("metadata_errors")
+            return original(*args, **kwargs)
+
+    open_._tolerates_metadata_errors = True
+    av.open = open_
+
+
 def resolve(device: str, compute_type: str | None) -> tuple[str, str]:
     """The device, `auto` made `cuda` when CTranslate2 sees a GPU and `cpu` otherwise, and the
     compute type: float16 on a GPU, int8 on the CPU, unless one was given."""
@@ -59,6 +83,8 @@ def main() -> int:
         print(json.dumps({"downloaded": args.model}))
         return 0
     from faster_whisper import WhisperModel
+
+    tolerate_av_metadata_errors()
 
     device, compute_type = resolve(args.device, args.compute_type)
     model = WhisperModel(args.model, device=device, compute_type=compute_type, download_root=args.models_dir)
