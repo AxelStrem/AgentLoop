@@ -103,6 +103,21 @@ def _parser() -> argparse.ArgumentParser:
     new.add_argument("--clone", action="store_true",
                      help="clone each repository the definition gives an address into its --repo path, when that "
                           "folder is missing or empty; one that is a clone of it already is used as it is")
+    voice = sub.add_parser("voice", help="speech to text for voice messages: set up local Whisper, or try an engine on a recording")
+    voice_sub = voice.add_subparsers(dest="action", metavar="action")
+    vsetup = voice_sub.add_parser("setup", help="make local Whisper's own Python environment, install faster-whisper "
+                                               "into it, and download the model")
+    vsetup.add_argument("--model", default="large-v3", help="the Whisper model to download (default large-v3)")
+    vsetup.add_argument("--cpu", action="store_true", help="leave the CUDA libraries out, for a machine without an NVIDIA GPU")
+    vsetup.add_argument("--dry-run", action="store_true", help="print the commands, and run none")
+    vtry = voice_sub.add_parser("try", help="transcribe one recording, and print its language and text")
+    vtry.add_argument("file", type=Path, help="the recording: webm, ogg, opus, m4a, mp3, wav or flac")
+    vtry.add_argument("--engine", choices=["whisper", "openai"], default="whisper")
+    vtry.add_argument("--model", help="whisper: large-v3 by default; openai: gpt-4o-transcribe by default")
+    vtry.add_argument("--device", choices=["auto", "cuda", "cpu"], help="whisper: auto by default")
+    vtry.add_argument("--compute-type", help="whisper: float16 on cuda and int8 on cpu by default")
+    vtry.add_argument("--language", help="the language's code, such as ru; detected when left out")
+    vtry.add_argument("--key-file", help="openai: the file holding the API key")
     imp = sub.add_parser("import-psd1", help="export a script's projects/<name>.psd1 as the definition and tools to put "
                                               "beside its tracker, and say how to add its loop")
     imp.add_argument("file", type=Path, help="the .psd1, with its brief <name>.md and tools folder <name>/ beside it")
@@ -111,6 +126,28 @@ def _parser() -> argparse.ArgumentParser:
                      help="a file holding the tracker's own description; read from the tracker with the .psd1's "
                           "Server and KeyFile when left out")
     return parser
+
+
+def _voice(args: argparse.Namespace) -> int:
+    """`agentloop voice`: local Whisper's setup, or one recording transcribed (item voice-engines).
+    `try` takes its settings from its flags; the loop's own come from the `transcribe` setting."""
+    from agentloop import voice
+
+    if args.action == "setup":
+        return voice.setup(args.model, args.cpu, args.dry_run)
+    if args.action == "try":
+        settings = {"engine": args.engine, "model": args.model, "device": args.device,
+                    "computeType": args.compute_type, "language": args.language, "keyFile": args.key_file}
+        try:
+            got = voice.transcribe(args.file, {k: v for k, v in settings.items() if v})
+        except voice.VoiceError as error:
+            print(f"agentloop voice try: {error}", file=sys.stderr)
+            return 1
+        print(f"language  {got['language'] or '(not said)'}")
+        print(got["text"])
+        return 0
+    print("agentloop voice: say setup or try", file=sys.stderr)
+    return 2
 
 
 def _import_psd1(args: argparse.Namespace) -> int:
@@ -552,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
         args.item = args.model = args.worker = None
         args.setup_only = True
         return _run(args)
+    if args.command == "voice":
+        return _voice(args)
     if args.command == "accounts":
         return _accounts(args)
     if args.command == "review":

@@ -142,6 +142,9 @@ Every setting is in [docs/settings.md](docs/settings.md): what a project's defin
 machine's `settings.json` hold, where each file lives on each OS, and the run settings a project or
 a loop can change. [docs/examples/](docs/examples/) has examples of both.
 
+Voice messages are turned into text by local Whisper or OpenAI: [docs/voice.md](docs/voice.md) says
+how to set up Whisper (`agentloop voice setup`) and try an engine on a recording.
+
 ## Developing
 
 ```sh

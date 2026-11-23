@@ -5,6 +5,7 @@ AgenticLoop's.
     features.py     the command for a project's feature lists
     guard.py        the PreToolUse hook a session's settings file names
     review-run.py   the review of a run (item review)
+    whisper-run.py  local Whisper's transcription, run in its own environment (item voice-engines)
     AUTOTASK.md     the workflow every session's system prompt starts with
     AUTOTASK-windows.md  what of it holds on Windows only, added there alone
 
@@ -21,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-NAMES = ("tracker.py", "features.py", "guard.py", "review-run.py", "AUTOTASK.md", "AUTOTASK-windows.md")
+NAMES = ("tracker.py", "features.py", "guard.py", "review-run.py", "whisper-run.py", "AUTOTASK.md", "AUTOTASK-windows.md")
 
 
 def path(name: str) -> Path:
