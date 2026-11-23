@@ -262,7 +262,16 @@ let be, and dropped when the settings are next saved.
 
 ### Items for one bot
 
-An item is kept for particular bots by mentioning them: `@` and the Overseer account a bot's key
+An item is kept for one bot by its `for` column - the template's `assignee`, an account picked from
+the server's directory (item `for-col`). An item for an account is free only to the loops whose key
+signs in as it; the others list it as `held for <name>`, as below, and a claim of it refuses, saying
+whom it is for. A loop that claims an item for no one gives it to its own account, and its release
+leaves it so: from then on only that bot's loops take the item, and the build after a triage, or any
+later session, stays with it. To hand an item to another bot, or back to every loop, change or clear
+its `for` column on the page. An item filed by a session is for no one until a loop takes it.
+
+The column, when set, decides alone: the mentions below count only on an item for no one. An item is
+kept for particular bots by mentioning them: `@` and the Overseer account a bot's key
 signs in as, by its display name as the page shows it (its bold, colours and icons taken out, as
 Overseer's own `people::plain` does) or by its username, in any case. A display name may hold
 spaces, `@Zombo Bot`, and the longest name that fits is the one meant. A mention that runs on into a
