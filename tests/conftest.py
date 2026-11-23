@@ -252,7 +252,9 @@ def overseer_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Overse
         else:
             pytest.fail(f"{OVERSEER_SERVER.name} did not answer on {url} within 30 seconds")
         _hands_out_templates(url)
-        yield Overseer(url, root, key)
+        overseer = Overseer(url, root, key)
+        _keeps_mounts(overseer)
+        yield overseer
     finally:
         server.terminate()
         server.wait(timeout=10)
@@ -269,6 +271,37 @@ def _hands_out_templates(url: str) -> None:
         answer = {}
     if "template_version" not in answer.get("text", ""):
         pytest.skip(f"{OVERSEER_SERVER.name} hands out no project template: build a newer Overseer")
+
+
+# The least a tracker of the tests' is: its people mounted over the template's, as test_loop's are.
+_PROBE = """<projects/project_template.os/project> project (label="Probe") {
+    - name = "Probe"
+    mount people (source="../../people.os/People", hidden=true, lazy=false, mutable=false) { }
+    - Items {
+        - {
+            - added = "2026-10-01T00:00:00+00:00"
+            - handle = "probe"
+            - title = "The probe"
+        }
+    }
+    - History {
+    }
+}
+"""
+
+
+def _keeps_mounts(overseer: Overseer) -> None:
+    """Skip, saying why, where the server is older than the one whose mount replaces the template
+    node it matches (overseer:mount-over-template). The tests' trackers mount their people over the
+    template's, and such a server, saving one, writes the people into the project as bare lines and
+    drops the project's name, so that every tracker.py call after the first fails - dozens of tests
+    failing the same way. Its template does not tell it apart, as the library may be newer than
+    the build, so one write is tried."""
+    doc = overseer.document(_PROBE, project="probe")
+    overseer.tracker(doc, "note", "probe", "Does the mount survive a save?", check=False)
+    if "mount people" not in overseer.text(doc):
+        pytest.skip(f"{OVERSEER_SERVER.name} is older than mount-over-template and flattens the tests' "
+                    "trackers: build a newer Overseer")
 
 
 @pytest.fixture
