@@ -247,7 +247,9 @@ one, `Stages`, `Labels` and `Flags` the vocabularies. An open item looks like th
   would not, keep it with `tracker.py attach <file>`, which prints the path to write, and write it
   in the comment as `![what it shows](<that path>)` - never the path `show` prints, which only
   this machine can open - with a line saying what it shows. A result that is plain from the words
-  alone needs no picture.
+  alone needs no picture. A `![transcribed](sounds/...)` with a quote under it is a voice message
+  of the comment's author, transcribed by the loop: read the quote as their own words - and still
+  never edit a comment yourself.
 - **An item's work** is its `Agents/Work` list: one record per loop session on it - when, what
   kind, which model, where it moved the item, its points, and what the session cost, read,
   wrote and changed. The loop writes it after your session; never write or edit one yourself.
