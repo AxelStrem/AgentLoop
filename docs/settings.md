@@ -576,15 +576,29 @@ comes back is:
   stopped or a crash, while it was working, waiting out a limit or idle - whether or not
   `autoStart` is on;
 - a loop with `autoStart` on whose last run ended on an empty queue, `autoStart` having been off
-  then.
+  then;
+- a loop with `autoStart` on that ended to move to a newer build, and was not started on it.
 
 A loop a person stopped or killed, or ended by turning `autoStart` off, stays stopped; so does one
 that stopped on an error for you to look at, and one never started. Each run says how it ended in
-its `status.json` (`endedBy`: `stop`, `kill`, `autoOff`, `empty`, `error` or `done`). The loop's row
+its `status.json` (`endedBy`: `stop`, `kill`, `autoOff`, `empty`, `update`, `error` or `done`). The loop's row
 on the page says when and why it was started again, or why it could not be - kept until you start
 it yourself - and the page says which loops are waiting to come back while any are.
 `agentloop serve --no-restart-loops` starts none of them. Without `serve` started at login, the
 loops come back the first time you start it after a restart.
+
+**After an update** (item autoloops-update), a loop is started on the newest build, whichever app
+starts it - the page, `agentloop start`, or `serve` begun before the build: for a build
+(`agentloop build`), the version `current` names at that moment. A loop already running keeps the
+version it started with until it moves: one started by the page or `agentloop start` with
+`autoStart` on moves to a newer build between items - never in a session, the item at work
+finished and committed first - and within a minute while it waits for work. It says so, ends with
+`endedBy` `update`, and hands its start to the new build (`agentloop start <loop> --after <pid>`,
+which waits for the old run to end, its output in `handover.log` beside the loop's); the row says
+`started again: moved to build <id>`. A newer build is a new `current` for a build, and a new
+version installed over the package for one installed with pip, pipx or uv; a loop run from a clone
+never moves. A loop run in a terminal with `agentloop run` is only told, once. A handover that
+fails leaves the loop for `serve` to start again as it starts.
 
 With `push` on (item git-sync), loops on several machines work one branch. Before each session the
 loop fetches each clone's upstream and fast-forwards a clone that is only behind it; a clone whose

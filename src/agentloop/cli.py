@@ -65,6 +65,10 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument("--colour", choices=["auto", "always", "never"], default="auto", help=argparse.SUPPRESS)
     start = sub.add_parser("start", help="start a loop as a process of its own, which goes on when this ends")
     start.add_argument("loop")
+    # Given by a loop moving to a newer build (item autoloops-update): start once that run has
+    # ended, and say why on the page.
+    start.add_argument("--after", type=int, help=argparse.SUPPRESS)
+    start.add_argument("--why", help=argparse.SUPPRESS)
     stop = sub.add_parser("stop", help="stop a loop once the item at work is done, as stop-agent-loop.ps1 does")
     stop.add_argument("loop")
     kill = sub.add_parser("kill", help="stop a loop now, its session ended, as kill-agent-loop.ps1 does")
@@ -276,7 +280,8 @@ def _run(args: argparse.Namespace) -> int:
         run = loop.Run(machine, found, out=lambda line: print(line, flush=True), paint=paint, worker=args.worker,
                        overrides={"model": args.model},
                        lock_wait=2.0 if args.managed else 0.0, setup_only=args.setup_only,
-                       again=getattr(args, "again", False) or (args.managed and args.setup_only))
+                       again=getattr(args, "again", False) or (args.managed and args.setup_only),
+                       managed=bool(args.managed))
         return run.dry(args.item) if args.dry else run.run()
     except (config.ConfigError, loop.LoopError, session.SessionError) as error:
         # Red, as the script writes what keeps it from starting.
@@ -339,7 +344,7 @@ def _runner(args: argparse.Namespace) -> int:
                     print(s.line())
             return 0
         if args.command == "start":
-            s = r.start(args.loop)
+            s = r.start_after(args.loop, args.after, args.why) if args.after else r.start(args.loop, why=args.why)
             print(f"Started {args.loop} on {s.project}; its output goes to {runner.output_path(args.loop)}")
             return 0
         if args.command == "stop":

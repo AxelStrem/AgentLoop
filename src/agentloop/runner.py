@@ -23,9 +23,13 @@ the run lock, status.json, running.json, the output - is in files, not in this p
   its process gone mid-run, without being stopped or killed, as a container's are when it is
   stopped or a machine's when it restarts - which said it was working and holds no lock (item
   docker-image); and one with Auto start on whose last run ended on an empty queue, Auto start
-  having been off then. A loop a person stopped, killed or turned Auto start off for, one that
-  stopped on an error for the owner to look at, and one never started, stay as they are. Each start
-  so made is kept in `restarted.json`, with why, for the page, until a person starts the loop.
+  having been off then, or ended to move to a newer build and was not started on it. A loop a
+  person stopped, killed or turned Auto start off for, one that stopped on an error for the owner
+  to look at, and one never started, stay as they are. Each start so made is kept in
+  `restarted.json`, with why, for the page, until a person starts the loop.
+- A loop waiting in Auto start that sees a newer build ends, and hands its start to the new build
+  (`agentloop start --after <pid>`, `Runner.start_after`, item autoloops-update): it waits for the
+  old run to end, then starts the loop as any start does, `restarted.json` saying why.
 
 Differences from the scripts, each deliberate:
 - The kill ends the claude running.json names, not every claude.exe whose parent is the loop.
@@ -51,7 +55,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from agentloop import config, definition, loop as loop_mod
+from agentloop import build, config, definition, loop as loop_mod
 
 # How long a killed loop is given to end of its own - it looks at the kill file every few seconds
 # while it waits out a limit - before it is ended too.
@@ -66,6 +70,10 @@ STARTING = 60.0
 # How long a start waits for the last run to let go of its output, in seconds: a loop says how it
 # ended a moment before its process exits and closes the output it was given.
 LET_GO = 2.0
+
+# How long a handover's start waits for the loop it takes over from to end, in seconds: it has
+# only to say how it ended and exit (item autoloops-update).
+HANDOVER_WAIT = 300.0
 
 # How long a repository's top is remembered for what is only shown, in seconds.
 TOP_KEPT = 60.0
@@ -120,7 +128,7 @@ class LoopStatus:
     # sessions, since}; and what a held loop waits for: "left" for those, none for a definition.
     leftFiles: list | None = None
     heldFor: str | None = None
-    # How its last run ended (Run._ended_by): stop, kill, autoOff, empty, error or done.
+    # How its last run ended (Run._ended_by): stop, kill, autoOff, empty, update, error or done.
     endedBy: str | None = None
     # Not running, and `serve` would start it again: why (item autoloops-start).
     comesBack: str | None = None
@@ -203,7 +211,9 @@ def _now() -> str:
 
 # Why each run's end reads as one a person, or the owner's attention, asked for: such a loop is left
 # as it is. A status from before endedBy was written has none, and is left too.
-COME_BACK_AFTER = {"empty": "Auto start is on, and its last run ended on an empty queue"}
+COME_BACK_AFTER = {"empty": "Auto start is on, and its last run ended on an empty queue",
+                   # Ended to move to a newer build, and its handover did not start it (item autoloops-update).
+                   "update": "Auto start is on, and its last run ended to move to a newer build"}
 
 
 def comes_back(settings: config.Settings, found: config.Loop, files: _Files, said: dict | None, lock: bool) -> str | None:
@@ -433,15 +443,21 @@ def _detached() -> list[dict]:
     return [{"start_new_session": True}]
 
 
+def app_command() -> list[str]:
+    """The command that runs this app afresh: for a build, the version `current` names now, which
+    Python runs through its __main__.py (build.run_folder) - so that a loop started by a `serve`
+    begun before the last build is on the new one; else the installed package, as installed now."""
+    folder = build.run_folder()
+    if folder is not None:
+        return [sys.executable, str(folder)]
+    return [sys.executable, "-m", "agentloop"]
+
+
 def command(name: str, setup: bool = False) -> list[str]:
-    """The command that runs a loop with this same app: a build's folder (build.py), which Python
-    runs through its __main__.py, or else the installed package. With `setup`, a run that only
-    sets its project up again (item project-setup)."""
-    package = Path(__file__).resolve().parent
+    """The command that runs a loop: `app_command`'s. With `setup`, a run that only sets its
+    project up again (item project-setup)."""
     more = ["--setup-only"] if setup else []
-    if (package.parent / "__main__.py").is_file():
-        return [sys.executable, str(package.parent), "run", name, "--managed", *more]
-    return [sys.executable, "-m", "agentloop", "run", name, "--managed", *more]
+    return [*app_command(), "run", name, "--managed", *more]
 
 
 def output_path(name: str) -> Path:
@@ -525,6 +541,20 @@ class Runner:
         else:
             loop_mod.remove(files.restarted)
         return self.status(name)
+
+    def start_after(self, name: str, pid: int, why: str | None = None, wait: float = HANDOVER_WAIT) -> LoopStatus:
+        """Starts the loop once the run `pid` has ended (`agentloop start --after`, item
+        autoloops-update): a loop moving to a newer build hands its start over so, and ends. Its
+        lock must be let go of, and on Windows its process gone too, which will not let the output
+        it held be moved aside while it is open. On macOS and Linux the lock alone says it: there
+        an open file can be renamed, and a run `serve` started stays a zombie until it is reaped."""
+        found = self._loop(name)
+        deadline = time.monotonic() + wait
+        while held(found) or (os.name == "nt" and pid_alive(pid)):
+            if time.monotonic() >= deadline:
+                raise RunnerError(f"The run of {name} it was to take over from, process {pid}, has not ended.")
+            time.sleep(0.2)
+        return self.start(name, why=why)
 
     def not_restarted(self, name: str, why: str, error: str) -> None:
         """Keeps, for the page, that `serve` would have started the loop again and could not."""

@@ -14,6 +14,10 @@ days is still reading the files it started from (guard.py runs again on every to
 `<id>` is `<UTC yyyymmdd-HHMMSS>-<short commit>`, then `-dirty` if the tree had changes. A launcher
 reads `current` and runs `python versions/<id>`; Python runs a folder's `__main__.py`.
 
+A loop is started on the version `current` names at that moment (`run_folder`), whichever app
+starts it, and one waiting in Auto start moves to a newer build between items (`newer_build`,
+item autoloops-update): an installed package's newer build is the version installed over it.
+
 The sh launcher, its execute bit and the symlink handling are untried here: this machine is
 Windows. Only the text of the sh launcher is tested (item other-os tries it on macOS and Linux).
 """
@@ -86,6 +90,73 @@ def describe(package: Path | None = None) -> str:
             pass
         parts.append(f"built {built}")
     return f"agentloop {record.get('version', __version__)} ({', '.join(parts)})"
+
+
+# A newer build than the one running (item autoloops-update)
+
+def _current_id(package: Path) -> str | None:
+    """For a build's package (`<to>/versions/<id>/agentloop`), the id `<to>/current` names, when
+    that version is there to run; None otherwise."""
+    versions = package.parent.parent
+    if versions.name != VERSIONS:
+        return None
+    try:
+        name = (versions.parent / CURRENT).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not name or "/" in name or "\\" in name or not (versions / name / "__main__.py").is_file():
+        return None
+    return name
+
+
+def run_folder(package: Path | None = None) -> Path | None:
+    """The folder a loop is started from, Python running its __main__.py: for a build, the version
+    `current` names now - so that every start, whichever app makes it, is on the newest build -
+    else the one this app runs from. None for an installed package or the source tree."""
+    package = (package or package_dir()).resolve()
+    if not (package.parent / "__main__.py").is_file():
+        return None
+    current = _current_id(package)
+    return package.parent.parent / current if current else package.parent
+
+
+def _installed_version(package: Path) -> str | None:
+    """The version of the package installed where this one runs from, read afresh: a wheel's
+    install (pip, pipx, uv tool) keeps `agentloop-<version>.dist-info` beside the package, and an
+    update replaces both in place. Only once its RECORD is written, as an installer does last. The
+    source tree has none beside it - an editable install keeps its dist-info elsewhere - so a
+    `__version__` bumped in the source is never taken for an update. More than one there - an
+    install that left an old one behind - says nothing for sure, and is None: a loop moving on it
+    could find itself still not on it, and move again and again."""
+    found = set()
+    for info in package.parent.glob("agentloop-*.dist-info"):
+        if not (info / "RECORD").is_file():
+            continue
+        try:
+            text = (info / "METADATA").read_text(encoding="utf-8")
+        except OSError:
+            return None
+        for line in text.splitlines():
+            if line.startswith("Version:"):
+                found.add(line.split(":", 1)[1].strip())
+                break
+            if not line.strip():
+                break
+    if len(found) != 1:
+        return None
+    return found.pop() or None
+
+
+def newer_build(package: Path | None = None) -> str | None:
+    """What a loop running from this package would move to, or None: for a build, the id `current`
+    names when it is not the version running; for an installed package, the installed version when
+    it is not `__version__`. None from the source tree, which a loop never moves from."""
+    package = (package or package_dir()).resolve()
+    if read_build(package) is not None:
+        current = _current_id(package)
+        return current if current and current != package.parent.name else None
+    installed = _installed_version(package)
+    return installed if installed and installed != __version__ else None
 
 
 # The source tree
@@ -277,7 +348,7 @@ def run(to_argument: str | None) -> int:
     print(f"at       {built.to}")
     print(f"run      {built.launcher}")
     if built.previous:
-        print(f"replaced {built.previous} (loops already running keep it)")
+        print(f"replaced {built.previous} (loops already running keep it; those in Auto start move to this one between items)")
     if built.kept:
         print("older versions still kept (item runner will say which are in use, and --prune remove the rest):")
         for name in built.kept:

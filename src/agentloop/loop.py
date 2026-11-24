@@ -47,6 +47,10 @@ Differences from the script, each deliberate:
 - With `autoStart` on, a loop with nothing to work waits rather than ending, and while it waits
   hears its tracker change through the server's watch stream (watch.py, item instant-auto); the
   script ends on an empty queue.
+- With `autoStart` on, a run the runner started moves to a newer build (build.newer_build) between
+  items and in its idle wait, never in a session: it ends, `endedBy` "update", and hands its start
+  to the new build with `agentloop start --after <its pid>` (`_hand_over`, item autoloops-update).
+  The script runs from AgenticLoop's files, and has no builds to move between.
 - Each session claims its item before it begins and releases it when it ends, however it ends,
   so that other loops leave it alone (item tracker-claim); the script does neither. It is claimed
   with `tracker.py claim` once the session's snapshot is taken, as the session's own work begins.
@@ -109,12 +113,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-from agentloop import accounts, brew, colours, commits, config, definition, session, setup, sync, tools, usage, voice, watch
+from agentloop import accounts, brew, build, colours, commits, config, definition, session, setup, sync, tools, usage, voice, watch
 
 # The pause between clean iterations, in seconds.
 COOLDOWN = 5
 # How long a tracker that changed must stay still before an idle loop looks at it (item instant-auto).
 SETTLE_SECONDS = 10
+# How often an idle loop looks for a newer build to move to, in seconds (item autoloops-update).
+UPDATE_SECONDS = 60
 
 
 class LoopError(Exception):
@@ -490,8 +496,13 @@ class Run:
         lock_wait: float = 0.0,
         setup_only: bool = False,
         again: bool = False,
+        managed: bool = False,
     ):
         self.out = out
+        # Started by the runner, as a process of its own: such a run, waiting in Auto start, moves
+        # to a newer build by handing its start over to it (item autoloops-update). One in a
+        # terminal is only told of the build.
+        self.managed = managed
         # A run that only sets the project up, and runs no session: `agentloop setup`, and the
         # page's Set up again on a loop that is stopped (item project-setup). `again` runs the
         # script whether or not it is due.
@@ -590,8 +601,9 @@ class Run:
         # A stop or a kill asked while paused at a worker's limit, before a triage's build.
         self.limit_stopped = False
         # How the run ended, when a person or the queue ended it rather than an error: "stop",
-        # "kill", "autoOff" or "empty" (item autoloops-start). Written into the final status, so
-        # that `serve` starting again can tell a loop a person ended from one that only died.
+        # "kill", "autoOff", "empty" or "update" (items autoloops-start, autoloops-update). Written
+        # into the final status, so that `serve` starting again can tell a loop a person ended from
+        # one that only died.
         self.ended_by: str | None = None
         self.seen: dict[str, dict] = {}
         self.session_spent: dict[str, session.Spent] = {}
@@ -628,6 +640,11 @@ class Run:
         self.bench_failed = False
         # The files changed before a session and not touched by it that this run has said, once.
         self.told_untouched: set[tuple[str, str]] = set()
+        # The newer build this run ends to move to, the one a run in a terminal was told of, and
+        # when an idle wait last looked for one (item autoloops-update).
+        self.moving_to: str | None = None
+        self.told_newer: str | None = None
+        self.update_looked: float | None = None
 
     def _status(self, **changes) -> None:
         """status.json, for the page: written on each change, whole."""
@@ -1589,6 +1606,7 @@ class Run:
         if self.setup_only:
             return self._setup_alone()
         self.say(f" Starting the agent loop on {self.project}. To stop it once the item at work is done, make the file {self.stop_file} - or at once, {self.kill_file}", "Cyan")
+        self.say(f" {build.describe()}", "DarkGray")
         status = 0
         while True:
             # The script's mutex, had again once the loop of the project that had it has ended.
@@ -1603,6 +1621,10 @@ class Run:
                 remove(self.stop_file)
                 self.ended_by = "stop"
                 self.say("Stopping as asked.", "Green")
+                break
+            # Between items, never in a session: a loop in Auto start moves to a newer build, the
+            # item it was working finished and committed (item autoloops-update).
+            if self.iteration > 0 and self._auto_start() and self._move_to_newer():
                 break
             # A changed definition, before the next session: read again after a session, and
             # waited on from the first while one is still to be accepted (item doc-change).
@@ -1695,9 +1717,64 @@ class Run:
             # A brief pause between clean iterations.
             self.clock.sleep(COOLDOWN)
 
+        if self.moving_to and status == 0:
+            self._hand_over()
         self.say(f"Loop finished; its sessions came to ${figure(round(self.run_cost, 2))}.", "Green")
         self.usage_line()
         return status
+
+    def _newer(self) -> str | None:
+        """The newer build this run should move to, or None (build.newer_build). A run in a terminal
+        is told of it once, and goes on: only one the runner started can be started again unseen."""
+        try:
+            newer = build.newer_build()
+        except OSError:
+            return None
+        if not newer:
+            return None
+        if not self.managed:
+            if newer != self.told_newer:
+                self.told_newer = newer
+                self.say(f" A newer build, {newer}, is in place: this run goes on as it is, and its next start is on it.", "DarkYellow")
+            return None
+        return newer
+
+    def _move_to_newer(self) -> bool:
+        """Whether the run ends here to move to a newer build: it says so, and the end of `_loop`
+        hands its start over (`_hand_over`). Ended so, with "update", a loop whose handover failed
+        is one `serve` starting starts again (runner.COME_BACK_AFTER)."""
+        newer = self._newer()
+        if not newer:
+            return False
+        self.moving_to = newer
+        self.ended_by = "update"
+        self.say(f" A newer build, {newer}, is in place: ending here, to start again on it.", "Green")
+        return True
+
+    def _hand_over(self) -> None:
+        """Starts `agentloop start <loop> --after <this pid>` on the new build, detached as the
+        runner starts a loop, so that it outlives this run: it waits for this run to end and let go
+        of its lock and output, then starts the loop, and the page says it moved. What it prints
+        goes to handover.log beside the loop's output."""
+        # runner imports this module, so it is imported only here.
+        from agentloop import runner
+
+        why = f"moved to build {self.moving_to}"
+        argv = [*runner.app_command(), "start", self.loop.name, "--after", str(os.getpid()), "--why", why]
+        try:
+            with open(self.loop_dir / "handover.log", "wb") as out, open(os.devnull, "rb") as nothing:
+                for options in runner._detached():
+                    try:
+                        subprocess.Popen(argv, stdin=nothing, stdout=out, stderr=subprocess.STDOUT,
+                                         cwd=self.loop_dir, close_fds=True, **options)
+                    except OSError:
+                        # A job that does not allow breaking away refuses the start: the next way.
+                        continue
+                    self.say(f" Handed the start over to build {self.moving_to}: the loop starts again on it once this run has ended.", "Green")
+                    return
+        except OSError:
+            pass
+        self.say(" The start could not be handed over to the new build: serve starts the loop again as it starts, or start it by hand.", "DarkYellow")
 
     def _auto_start(self) -> bool:
         """Whether the loop waits for work when the queue is empty, rather than ending. Read from
@@ -1761,6 +1838,10 @@ class Run:
                     self.ended_by = "autoOff"
                     self.say("Auto-start was turned off. Stopping.", "Green")
                     return None
+                if self.update_looked is None or self.clock.now() - self.update_looked >= UPDATE_SECONDS:
+                    self.update_looked = self.clock.now()
+                    if self._move_to_newer():
+                        return None
                 while heard:
                     self.say(heard.pop(0), "DarkYellow")
                 if bool(self.status.get("watching")) != watcher.watching:
@@ -2236,8 +2317,8 @@ class Run:
     def _ended_by(self, code: int, error: str | None) -> str:
         """How the run ended, for its final status: "kill" or "stop" when a person asked for it,
         "autoOff" when the toggle ended its wait, "empty" when the queue ran out with Auto start
-        off, "error" for anything the owner has to look at, and "done" for any other clean end - a
-        setup-only run, say."""
+        off, "update" when it ended to move to a newer build, "error" for anything the owner has
+        to look at, and "done" for any other clean end - a setup-only run, say."""
         if self.killed:
             return "kill"
         if self.ended_by in ("kill", "stop", "autoOff"):

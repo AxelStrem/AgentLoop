@@ -159,7 +159,9 @@ That makes a copy at `<path>/versions/<id>`, with a launcher (`<path>/agentloop.
 After an upgrade, run the installed `agentloop build` again to add the new version beside the old
 one. The first build recorded `<path>` in the settings, so it needs no `--to` now. Use the
 `agentloop` the install put on `PATH`, not the launcher, which would copy the build it runs. A loop
-already running keeps the version it started with.
+already running keeps the version it started with, and one with **Auto start** on moves to the new
+build between items, or within a minute while it waits for work; every loop started after the
+build is on it.
 
 `agentloop --version` says what is running: `installed` for the installed package, the commit and
 the time for a build, and `from source` for a clone.
