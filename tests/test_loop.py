@@ -506,6 +506,8 @@ def test_going_on_not_once_a_stop_is_asked(project, fake_claude):
     assert "  The session asked to go on to beta; not in this session: a stop was asked for." in p.lines
     assert "Stopping as asked." in p.lines
     assert len(fake_claude.calls()) == 1 and not r.stop_file.exists()
+    # Said in its final status, so that serve starting again leaves it stopped (item autoloops-start).
+    assert ended_by(r) == "stop"
 
 
 # Stopping
@@ -551,9 +553,12 @@ def test_stops_on_a_session_without_a_result(project, fake_claude):
 def test_stops_after_sessions_that_left_an_item_where_it_was(project, fake_claude):
     p = project(item("alpha"))
     p.play(p.scene(result="COMMIT: alpha: looked"))
-    assert p.go() == 1
+    r = p.run()
+    assert r.run() == 1
     assert len(fake_claude.calls()) == 2
     assert "alpha is still at filed after 2 sessions on opus left it there. Stopping, for the owner to look." in p.lines
+    # For the owner to look at: serve starting does not start it again (item autoloops-start).
+    assert ended_by(r) == "error"
 
 
 def test_an_item_asked_about_is_not_a_repeat(project, fake_claude):
@@ -635,6 +640,7 @@ def test_a_kill_during_a_session(project, fake_claude):
     assert "Stopped at once, as asked: alpha is left as the session had it, its changes uncommitted. To carry the session on by hand:" in p.lines
     assert p.subjects(p.code) == [] and p.attempts()[0]["to"] == "killed"
     assert not r.kill_file.exists()
+    assert ended_by(r) == "kill"
 
 
 def test_a_kill_between_items(project, fake_claude):
@@ -650,6 +656,7 @@ def test_a_kill_between_items(project, fake_claude):
     assert len(fake_claude.calls()) == 1
     assert "Stopped at once, as asked, between items." in p.lines
     assert not r.kill_file.exists()
+    assert ended_by(r) == "kill"
 
 
 # Auto-start
@@ -726,8 +733,16 @@ def wait_watching(r) -> None:
 
 def test_without_auto_start_an_empty_queue_ends_the_loop(project, fake_claude):
     p = project(item("alpha", "testing"), autoStartMinutes=1)
-    assert p.go() == 0
+    r = p.run()
+    assert r.run() == 0
     assert p.clock.slept == 0 and "Nothing to work" not in p.text
+    # Nobody stopped it: with Auto start turned on since, serve starting brings it back.
+    assert ended_by(r) == "empty"
+
+
+def ended_by(r) -> str:
+    """How the run said it ended, in its final status (item autoloops-start)."""
+    return json.loads(r.status_file.read_text(encoding="utf-8"))["endedBy"]
 
 
 def test_a_kill_or_a_stop_ends_the_wait_at_once(project, fake_claude):
@@ -737,10 +752,12 @@ def test_a_kill_or_a_stop_ends_the_wait_at_once(project, fake_claude):
     assert r.run() == 0
     assert "Stopped at once, as asked, while idle." in p.lines
     assert not r.kill_file.exists() and p.clock.slept == usage.POLL_SECONDS
+    assert ended_by(r) == "kill"
     r = p.run()
     idling(p, lambda: r.stop_file.write_text(""))
     assert r.run() == 0
     assert "Stopping as asked." in p.lines and not r.stop_file.exists()
+    assert ended_by(r) == "stop"
 
 
 def test_the_toggle_turned_off_ends_the_wait(project, fake_claude):
@@ -755,6 +772,7 @@ def test_the_toggle_turned_off_ends_the_wait(project, fake_claude):
     idling(p, off)
     assert r.run() == 0
     assert "Auto-start was turned off. Stopping." in p.lines
+    assert ended_by(r) == "autoOff"
 
 
 def test_the_toggle_turned_on_during_a_run_reaches_it(project, fake_claude):
@@ -871,6 +889,7 @@ def test_a_stop_ends_a_pause(project, fake_claude):
     assert p.r.run() == 0
     assert len(fake_claude.calls()) == 1
     assert "Stopping as asked." in p.lines and p.r.status["state"] == "stopped"
+    assert p.r.status["endedBy"] == "stop"
 
 
 def test_a_limit_reached_in_a_triage_pauses_its_build(project, fake_claude):

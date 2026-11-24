@@ -223,10 +223,32 @@ function unrunBots(loop) {
   return others.filter((o) => !(o.bots || []).some((b) => running.has(b)));
 }
 
+// When the loop was started again by serve, or not started then: the time alone today, else the
+// day too (item autoloops-start).
+function whenText(at) {
+  const when = new Date(at);
+  if (isNaN(when)) return at;
+  const time = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return when.toDateString() === new Date().toDateString() ? time : `${when.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
+// The loops nobody ended that are not running (item autoloops-start): serve starts them again as
+// it starts, so these are mostly ones it could not start, or ones that ended since it did.
+function drawComingBack() {
+  const back = state.loops.filter((l) => !l.status.alive && l.status.comesBack);
+  const note = $("coming-back");
+  note.hidden = !back.length;
+  if (!back.length) return;
+  const names = back.map((l) => l.name).join(", ");
+  note.textContent = `${back.length === 1 ? `${names} is` : `${names} are`} waiting to come back: nobody stopped ${back.length === 1 ? "it" : "them"}, ` +
+    `and agentloop serve starts ${back.length === 1 ? "it" : "them"} again when it starts. Start ${back.length === 1 ? "it" : "them"} here, or start serve again.`;
+}
+
 function renderLoops() {
   const body = $("loops");
   body.replaceChildren();
   $("no-loops").hidden = state.loops.length > 0;
+  drawComingBack();
   for (const loop of state.loops) {
     const s = loop.status;
     const item = s.item ? h("span", { title: s.title || "" }, `${s.kind || ""} ${s.item}`.trim(), s.title ? h("span", { class: "sub", text: s.title }) : null) : "";
@@ -240,6 +262,13 @@ function renderLoops() {
           onclick: () => approveLimit(loop.worker, s.over.window) }, "Go on past the limit"));
     }
     if (s.state === "failed" && s.error) stateCell.push(h("span", { class: "problem", text: s.error }));
+    // Started again by serve as it started, or not, and why (item autoloops-start).
+    if (s.restarted && s.restarted.error) {
+      stateCell.push(h("span", { class: "problem", title: s.restarted.why || "", text: `not started again at ${whenText(s.restarted.at)}: ${s.restarted.error}` }));
+    } else if (s.restarted) {
+      stateCell.push(h("span", { class: "sub", text: `started again at ${whenText(s.restarted.at)}: ${s.restarted.why}` }));
+    }
+    if (!s.alive && s.comesBack) stateCell.push(h("span", { class: "sub", text: `comes back when serve starts: ${s.comesBack}` }));
     if (s.busy) stateCell.push(h("span", { class: "sub", text: s.busy }));
     const unrun = unrunBots(loop);
     if (unrun.length) {

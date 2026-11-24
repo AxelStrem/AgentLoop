@@ -19,9 +19,13 @@ the run lock, status.json, running.json, the output - is in files, not in this p
   `kill-agent-loop.ps1` ends it: the tree on Windows (`taskkill /T /F`), the process group on macOS
   and Linux, claude being started in a group of its own (session._popen_options). A loop that has
   not ended a while after is ended the same way.
-- A loop cut off - its process gone mid-run, without being stopped or killed, as a container's are
-  when it is stopped - is one that said it was working and holds no lock (`Runner.cut_off`). `serve
-  --restart-loops` starts those again (item docker-image).
+- A loop comes back when `serve` starts (`Runner.come_back`, item autoloops-start): one cut off -
+  its process gone mid-run, without being stopped or killed, as a container's are when it is
+  stopped or a machine's when it restarts - which said it was working and holds no lock (item
+  docker-image); and one with Auto start on whose last run ended on an empty queue, Auto start
+  having been off then. A loop a person stopped, killed or turned Auto start off for, one that
+  stopped on an error for the owner to look at, and one never started, stay as they are. Each start
+  so made is kept in `restarted.json`, with why, for the page, until a person starts the loop.
 
 Differences from the scripts, each deliberate:
 - The kill ends the claude running.json names, not every claude.exe whose parent is the loop.
@@ -44,6 +48,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from agentloop import config, definition, loop as loop_mod
@@ -111,6 +116,12 @@ class LoopStatus:
     transcribe: bool | None = None
     unheard: int = 0
     voiceProblem: str | None = None
+    # How its last run ended (Run._ended_by): stop, kill, autoOff, empty, error or done.
+    endedBy: str | None = None
+    # Not running, and `serve` would start it again: why (item autoloops-start).
+    comesBack: str | None = None
+    # Started again by `serve` at its start, as {at, why}, or not started then, with {error} too.
+    restarted: dict | None = None
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -158,12 +169,14 @@ class _Files:
     output: Path
     previous: Path
     lock: Path
+    restarted: Path
 
 
 def _files(found: config.Loop) -> _Files:
     folder = loop_mod.loop_dir(found.project, found.name)
     return _Files(folder, folder / "stop", folder / "kill", folder / "running.json", folder / "status.json",
-                  folder / "started.json", folder / "output.log", folder / "output.prev.log", loop_mod.lock_path(found.project, found.name))
+                  folder / "started.json", folder / "output.log", folder / "output.prev.log", loop_mod.lock_path(found.project, found.name),
+                  folder / "restarted.json")
 
 
 def _read_json(path: Path) -> dict | None:
@@ -177,6 +190,42 @@ def _read_json(path: Path) -> dict | None:
         except (OSError, ValueError):
             return None
         return value if isinstance(value, dict) else None
+    return None
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# Why each run's end reads as one a person, or the owner's attention, asked for: such a loop is left
+# as it is. A status from before endedBy was written has none, and is left too.
+COME_BACK_AFTER = {"empty": "Auto start is on, and its last run ended on an empty queue"}
+
+
+def comes_back(settings: config.Settings, found: config.Loop, files: _Files, said: dict | None, lock: bool) -> str | None:
+    """Why `serve` starting would start this loop again, or None (item autoloops-start):
+
+    - cut off: it said it was working - running, waiting, idle, held or setting up - and holds no
+      lock, nor left a stop or kill file: its process was ended under it, by a restart, a
+      container stopped or a crash, whether or not Auto start is on (item docker-image);
+    - or Auto start is on, and its last run ended as `COME_BACK_AFTER` says: with nothing to do
+      while Auto start was off, which it no longer is.
+
+    A loop a person stopped, killed or turned Auto start off for, one that stopped on an error for
+    the owner to look at - starting it again unseen would spend sessions on what stopped it - and
+    one that never said anything, which may never have begun, are not."""
+    if lock or said is None or files.kill.exists() or files.stop.exists():
+        return None
+    state = said.get("state")
+    if not state:
+        return None
+    if state not in FINAL:
+        return "its process ended mid-run, without being stopped"
+    if said.get("killed"):
+        return None
+    why = COME_BACK_AFTER.get(str(said.get("endedBy")))
+    if why and config.effective_settings(settings.defaults, found.settings).get("autoStart"):
+        return why
     return None
 
 
@@ -415,10 +464,11 @@ class Runner:
             raise RunnerError(f"No loop named {name}. The loops are: {known}")
         return found
 
-    def start(self, name: str, setup: bool = False) -> LoopStatus:
+    def start(self, name: str, setup: bool = False, why: str | None = None) -> LoopStatus:
         """Starts the loop as a process of its own. Refused while its project is being worked.
         With `setup`, a run that runs its project's setup script again and ends, no session run
-        (item project-setup)."""
+        (item project-setup). With `why`, a start `serve` made of its own (`come_back`), kept in
+        restarted.json for the page; a start without one is a person's, and clears it."""
         found = self._loop(name)
         files = _files(found)
         # A loop of ours that has said how it ended is waited for, for the moment it takes to exit.
@@ -466,7 +516,15 @@ class Runner:
                 raise RunnerError(f"The loop {name} could not be started.")
         self._started[name] = process
         loop_mod.write_json(files.started, {"pid": process.pid, "at": time.time()})
+        if why:
+            loop_mod.write_json(files.restarted, {"at": _now(), "why": why})
+        else:
+            loop_mod.remove(files.restarted)
         return self.status(name)
+
+    def not_restarted(self, name: str, why: str, error: str) -> None:
+        """Keeps, for the page, that `serve` would have started the loop again and could not."""
+        loop_mod.write_json(_files(self._loop(name)).restarted, {"at": _now(), "why": why, "error": error})
 
     def stop(self, name: str) -> LoopStatus:
         """Asks the loop to stop once the item at work is done (`stop-agent-loop.ps1`)."""
@@ -516,7 +574,7 @@ class Runner:
             # would have cleared it.
             files.kill.unlink(missing_ok=True)
             # Nor did it say how it ended: said here, so that it reads as killed, and so that
-            # `serve --restart-loops` does not take it for one cut off and start it again.
+            # `serve` starting does not take it for one cut off and start it again.
             said = _read_json(files.status) or {}
             loop_mod.write_json(files.status, {**said, "state": "failed", "killed": True,
                                                "error": "ended by force after the kill", "item": None})
@@ -531,29 +589,26 @@ class Runner:
         if process is not None and process.poll() is not None and self._started.get(name) is process:
             self._started.pop(name, None)
 
-    def cut_off(self) -> list[str]:
-        """The loops that died mid-run without being stopped or killed: a container stopped under
-        them, or a machine that lost its power (item docker-image). Each said it was working -
-        running, waiting, idle, held or setting up - and holds no lock. A loop stopped or ended
-        says so first, and a killed one leaves its kill file, so neither is taken for one; nor is
-        one that died before it said anything, which may never have begun."""
+    def come_back(self) -> list[tuple[str, str]]:
+        """The loops `serve` starts again as it starts, each with why (item autoloops-start): those
+        `comes_back` names, of this machine's settings, in their order."""
+        settings = config.load_settings()
         found = []
-        for each in config.load_settings().loops:
+        for each in settings.loops:
             files = _files(each)
-            said = _read_json(files.status) or {}
-            state = said.get("state")
-            if not state or state in FINAL or files.kill.exists() or held(each):
-                continue
-            found.append(each.name)
+            why = comes_back(settings, each, files, _read_json(files.status), held(each))
+            if why:
+                found.append((each.name, why))
         return found
 
     def status(self, name: str) -> LoopStatus:
         return self._status(self._loop(name))
 
     def statuses(self) -> list[LoopStatus]:
-        return [self._status(found) for found in config.load_settings().loops]
+        settings = config.load_settings()
+        return [self._status(found, settings) for found in settings.loops]
 
-    def _status(self, found: config.Loop) -> LoopStatus:
+    def _status(self, found: config.Loop, settings: config.Settings | None = None) -> LoopStatus:
         self._reap(found.name)
         files = _files(found)
         # The lock first: a loop says how it ended before it lets go of it, so one seen without
@@ -565,6 +620,12 @@ class Runner:
         def made(state: str, alive: bool, **more) -> LoopStatus:
             fields = {k: v for k, v in (said or {}).items() if k in LoopStatus.__dataclass_fields__}
             fields.update(name=found.name, project=found.project, state=state, alive=alive, **more)
+            fields["restarted"] = _read_json(files.restarted)
+            if not alive:
+                try:
+                    fields["comesBack"] = comes_back(settings or config.load_settings(), found, files, said, lock)
+                except config.ConfigError:
+                    fields["comesBack"] = None
             fields["cost"] = float(fields.get("cost") or 0.0)
             return LoopStatus(**fields)
 

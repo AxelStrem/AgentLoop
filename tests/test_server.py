@@ -314,54 +314,130 @@ def test_serve_ends_on_sigterm_as_on_ctrl_c(home, monkeypatch):
     assert signal.getsignal(signal.SIGTERM) == before
 
 
-def write_said(name: str, state: str | None, kill: bool = False) -> None:
-    """A loop's folder as its last run left it: what it said in status.json, and a kill file."""
+def write_said(name: str, state: str | None, kill: bool = False, stop: bool = False, **more) -> None:
+    """A loop's folder as its last run left it: what it said in status.json, and a stop or kill file."""
     folder = loop_mod.loop_dir("proj", name)
     folder.mkdir(parents=True, exist_ok=True)
     if state is not None:
-        loop_mod.write_json(folder / "status.json", {"state": state, "item": "alpha"})
+        loop_mod.write_json(folder / "status.json", {"state": state, "item": "alpha", **more})
     if kill:
         (folder / "kill").touch()
+    if stop:
+        (folder / "stop").touch()
 
 
-def test_the_loops_cut_off_mid_run_are_started_again(home, monkeypatch, capsys):
+AUTO = {"autoStart": True}
+
+
+def test_serve_starts_again_the_loops_nobody_ended(home, monkeypatch, capsys):
     path = config.paths().settings
     raw = json.loads(path.read_text(encoding="utf-8"))
-    names = ["working", "waiting", "idle", "stopped", "failed", "killed", "unsaid", "refused"]
-    raw["loops"] = [loop_entry(name) for name in names]
+    raw["loops"] = [
+        # Died saying it was working, waiting out a limit or idle: cut off, Auto start on or not.
+        loop_entry("working"), loop_entry("waiting"), loop_entry("idle", settings=AUTO), loop_entry("refused"),
+        # Auto start on, its last run ended on an empty queue while it was off: comes back.
+        loop_entry("emptied", settings=AUTO),
+        # Auto start on in the machine's defaults reaches it too.
+        loop_entry("by-default"),
+        # Ended on an empty queue with Auto start still off: left.
+        loop_entry("ended"),
+        # Auto start on, and a person stopped it, killed it, turned Auto start off, or ended it by
+        # force; or it stopped on an error, said nothing, or left a stop file and died: left.
+        loop_entry("stopped", settings=AUTO), loop_entry("killed", settings=AUTO), loop_entry("off", settings=AUTO),
+        loop_entry("forced", settings=AUTO), loop_entry("failed", settings=AUTO), loop_entry("unsaid", settings=AUTO),
+        loop_entry("stop-left", settings=AUTO), loop_entry("kill-left", settings=AUTO), loop_entry("old", settings=AUTO),
+    ]
+    raw["defaults"] = {}
     config.save_json(path, raw)
-    # Died saying it was working, waiting out a limit or idle: cut off.
     write_said("working", "running")
     write_said("waiting", "waiting")
     write_said("idle", "idle")
     write_said("refused", "running")
-    # Stopped, ended with an error, killed, or never said anything: left as they are.
-    write_said("stopped", "stopped")
-    write_said("failed", "failed")
-    write_said("killed", "running", kill=True)
+    write_said("emptied", "stopped", endedBy="empty")
+    write_said("ended", "stopped", endedBy="empty")
+    write_said("stopped", "stopped", endedBy="stop")
+    write_said("killed", "stopped", endedBy="kill", killed=True)
+    write_said("off", "stopped", endedBy="autoOff")
+    write_said("forced", "failed", killed=True, error="ended by force after the kill")
+    write_said("failed", "failed", endedBy="error", error="LoopError")
     write_said("unsaid", None)
+    write_said("stop-left", "idle", stop=True)
+    write_said("kill-left", "running", kill=True)
+    # A status from before endedBy was written: whoever stopped it, it is left.
+    write_said("old", "stopped")
     the_runner = runner.Runner()
-    assert the_runner.cut_off() == ["working", "waiting", "idle", "refused"]
+    cut = "its process ended mid-run, without being stopped"
+    emptied = runner.COME_BACK_AFTER["empty"]
+    assert the_runner.come_back() == [("working", cut), ("waiting", cut), ("idle", cut), ("refused", cut), ("emptied", emptied)]
+
+    # Auto start on in the machine's defaults, for a loop whose own settings do not say.
+    raw["loops"].append(loop_entry("defaulted"))
+    raw["defaults"] = {"autoStart": True}
+    config.save_json(path, raw)
+    write_said("defaulted", "stopped", endedBy="empty")
+    assert ("defaulted", emptied) in the_runner.come_back() and ("ended", emptied) in the_runner.come_back()
+    raw["loops"].pop()
+    raw["defaults"] = {}
+    config.save_json(path, raw)
+
+    # The page is told which would come back, and why, while they are not running.
+    by_name = {s.name: s for s in the_runner.statuses()}
+    assert by_name["emptied"].comesBack == emptied and by_name["working"].comesBack == cut
+    assert by_name["stopped"].comesBack is None and by_name["stopped"].endedBy == "stop"
 
     started = []
 
-    def start(self, name, setup=False):
+    def start(self, name, setup=False, why=None):
         if name == "refused":
             raise runner.RunnerError("refused cannot start: the script is working proj.")
-        started.append(name)
+        started.append((name, why))
 
     monkeypatch.setattr(runner.Runner, "start", start)
-    assert server.restart_cut_off(the_runner) == ["working", "waiting", "idle"]
-    assert started == ["working", "waiting", "idle"]
+    assert server.restart_loops_left(the_runner) == ["working", "waiting", "idle", "emptied"]
+    assert started == [("working", cut), ("waiting", cut), ("idle", cut), ("emptied", emptied)]
     out = capsys.readouterr()
-    assert "Started working again" in out.out and "refused was cut off, and could not be started again" in out.err
+    assert f"Started emptied again: {emptied}." in out.out
+    assert "refused could not be started again" in out.err and "the script is working proj" in out.err
+    # The one that could not start is kept for the page, with why.
+    refused = the_runner.status("refused").restarted
+    assert refused["why"] == cut and "the script is working proj" in refused["error"] and refused["at"]
 
-    # serve does so only when asked.
+    # serve does so as it starts, unless told not to; --restart-loops asks for the default.
     started.clear()
     monkeypatch.setenv("AGENTLOOP_HOST", "127.0.0.1")
     monkeypatch.setattr(server.Server, "serve_forever", lambda self, *a, **k: None)
-    assert server.serve(0) == 0 and started == []
-    assert server.serve(0, restart_loops=True) == 0 and started == ["working", "waiting", "idle"]
+    assert server.serve(0, restart_loops=False) == 0 and started == []
+    assert server.serve(0) == 0 and [n for n, _ in started] == ["working", "waiting", "idle", "emptied"]
+    started.clear()
+    from agentloop import cli
+
+    assert cli.main(["serve", "--port", "0", "--no-restart-loops"]) == 0 and started == []
+    assert cli.main(["serve", "--port", "0", "--restart-loops"]) == 0 and len(started) == 4
+
+
+def test_a_start_by_serve_is_kept_for_the_page_until_a_person_starts_the_loop(home, monkeypatch):
+    path = config.paths().settings
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["loops"] = [loop_entry("back", settings=AUTO)]
+    config.save_json(path, raw)
+    write_said("back", "stopped", endedBy="empty")
+
+    class Started:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: Started())
+    the_runner = runner.Runner()
+    the_runner.start("back", why="Auto start is on")
+    restarted = json.loads((loop_mod.loop_dir("proj", "back") / "restarted.json").read_text(encoding="utf-8"))
+    assert restarted["why"] == "Auto start is on" and restarted["at"] and "error" not in restarted
+    assert the_runner.status("back").restarted == restarted
+    the_runner._started.clear()
+    loop_mod.remove(loop_mod.loop_dir("proj", "back") / "started.json")
+    the_runner.start("back")
+    assert not (loop_mod.loop_dir("proj", "back") / "restarted.json").exists()
 
 
 def test_a_server_on_ipv6_loopback(home):

@@ -549,8 +549,25 @@ freed by one closed in another project's tracker, which this tracker's stream do
 page's row says `on any change` while the stream is heard. It holds its run lock and the script's
 mutex while it waits, as a running loop does. An item that comes up begins a new run, its
 repeats counted afresh. A stop or a kill ends the wait at once, and so does turning the setting off,
-which a running loop reads from this file; everything else that ends a loop still ends it, and a
-loop that has ended is not started again.
+which a running loop reads from this file; everything else that ends a loop still ends it.
+
+**When serve starts** (item autoloops-start), on every system, it first starts again the loops
+nobody ended. A loop's process outlives `serve`, so a loop still running is left as it is; what
+comes back is:
+
+- a loop cut off mid-run - its process ended under it by a restart of the machine, a container
+  stopped or a crash, while it was working, waiting out a limit or idle - whether or not
+  `autoStart` is on;
+- a loop with `autoStart` on whose last run ended on an empty queue, `autoStart` having been off
+  then.
+
+A loop a person stopped or killed, or ended by turning `autoStart` off, stays stopped; so does one
+that stopped on an error for you to look at, and one never started. Each run says how it ended in
+its `status.json` (`endedBy`: `stop`, `kill`, `autoOff`, `empty`, `error` or `done`). The loop's row
+on the page says when and why it was started again, or why it could not be - kept until you start
+it yourself - and the page says which loops are waiting to come back while any are.
+`agentloop serve --no-restart-loops` starts none of them. Without `serve` started at login, the
+loops come back the first time you start it after a restart.
 
 With `push` on (item git-sync), loops on several machines work one branch. Before each session the
 loop fetches each clone's upstream and fast-forwards a clone that is only behind it; a clone whose

@@ -580,6 +580,10 @@ class Run:
         self.killed = False
         # A stop or a kill asked while paused at a worker's limit, before a triage's build.
         self.limit_stopped = False
+        # How the run ended, when a person or the queue ended it rather than an error: "stop",
+        # "kill", "autoOff" or "empty" (item autoloops-start). Written into the final status, so
+        # that `serve` starting again can tell a loop a person ended from one that only died.
+        self.ended_by: str | None = None
         self.seen: dict[str, dict] = {}
         self.session_spent: dict[str, session.Spent] = {}
         self.session_context = 0
@@ -1553,7 +1557,7 @@ class Run:
                 remove(self.state_file)
                 self._status(state="stopped" if code == 0 and not error else "failed", ended=self._now(),
                              exit=None if error else code, error=error, killed=self.killed, until=None, limit=None,
-                             item=None, title=None, kind=None, session=None)
+                             item=None, title=None, kind=None, session=None, endedBy=self._ended_by(code, error))
 
     def _beside_others(self, others: list[str]) -> None:
         """Refuses a start beside another loop of the project that commits in a repository this one
@@ -1579,10 +1583,12 @@ class Run:
                 self.lock.retake()
             if self.kill_file.exists():
                 remove(self.kill_file)
+                self.ended_by = "kill"
                 self.say("Stopped at once, as asked, between items.", "Yellow")
                 break
             if self.stop_file.exists():
                 remove(self.stop_file)
+                self.ended_by = "stop"
                 self.say("Stopping as asked.", "Green")
                 break
             # A changed definition, before the next session: read again after a session, and
@@ -1616,6 +1622,7 @@ class Run:
             if item.get("signal"):
                 self.say(item["signal"], "Green")
                 if not self._auto_start():
+                    self.ended_by = "empty"
                     break
                 item = self._idle()
                 if not item:
@@ -1727,13 +1734,16 @@ class Run:
             while True:
                 if self.kill_file.exists():
                     remove(self.kill_file)
+                    self.ended_by = "kill"
                     self.say("Stopped at once, as asked, while idle.", "Yellow")
                     return None
                 if self.stop_file.exists():
                     remove(self.stop_file)
+                    self.ended_by = "stop"
                     self.say("Stopping as asked.", "Green")
                     return None
                 if not self._auto_start():
+                    self.ended_by = "autoOff"
                     self.say("Auto-start was turned off. Stopping.", "Green")
                     return None
                 while heard:
@@ -1923,10 +1933,12 @@ class Run:
         """A stop or a kill asked while the loop waits on something other than a session."""
         if self.kill_file.exists():
             remove(self.kill_file)
+            self.ended_by = "kill"
             self.say(f"Stopped at once, as asked, while {where}.", "Yellow")
             return True
         if self.stop_file.exists():
             remove(self.stop_file)
+            self.ended_by = "stop"
             self.say("Stopping as asked.", "Green")
             return True
         return False
@@ -2119,6 +2131,22 @@ class Run:
         self.say(f"  system prompt  {self.system_file}")
         self.say(f"  prompt         {prompt_file}")
         return 0
+
+    def _ended_by(self, code: int, error: str | None) -> str:
+        """How the run ended, for its final status: "kill" or "stop" when a person asked for it,
+        "autoOff" when the toggle ended its wait, "empty" when the queue ran out with Auto start
+        off, "error" for anything the owner has to look at, and "done" for any other clean end - a
+        setup-only run, say."""
+        if self.killed:
+            return "kill"
+        if self.ended_by in ("kill", "stop", "autoOff"):
+            return self.ended_by
+        if self.limit_stopped:
+            # A stop or a kill asked while paused at a worker's limit.
+            return "stop"
+        if error or code != 0:
+            return "error"
+        return self.ended_by or "done"
 
     def _stopped_cleanly(self) -> bool:
         # A kill, or a stop while paused at a worker's limit, is a stop asked for; anything else is

@@ -175,6 +175,34 @@ def test_a_loop_that_dies_reads_failed_and_a_new_start_keeps_the_last_output(mac
     assert m.until("b", lambda s: not s.alive).killed
 
 
+def test_an_idle_auto_start_loop_ended_from_outside_is_started_again_by_serve(machine):
+    # As a restart of the machine leaves it (item autoloops-start): an Auto start loop waiting for
+    # work, its process ended under it, is listening again once serve starts.
+    from agentloop import server
+
+    m = machine
+    path = config.paths().settings
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["loops"][1]["settings"]["autoStart"] = True
+    config.save_json(path, raw)
+    m.start("b", m.scene("b", move("gamma"), result="COMMIT: gamma: built"))
+    first = m.until("b", lambda s: s.state == "idle", timeout=90)
+    runner.end_tree(first.pid)
+    dead = m.until("b", lambda s: not s.alive)
+    cut = "its process ended mid-run, without being stopped"
+    assert dead.state == "failed" and dead.comesBack == cut
+    assert runner.Runner().come_back() == [("b", cut)]
+
+    assert server.restart_loops_left(runner.Runner()) == ["b"]
+    again = m.until("b", lambda s: s.alive and s.state == "idle", timeout=90)
+    assert again.pid != first.pid and again.restarted["why"] == cut and again.comesBack is None
+    # Stopped by a person, it is left stopped the next time serve starts.
+    m.runner.stop("b")
+    stopped = m.until("b", lambda s: not s.alive, timeout=90)
+    assert (stopped.state, stopped.endedBy, stopped.comesBack) == ("stopped", "stop", None)
+    assert runner.Runner().come_back() == []
+
+
 def test_a_loop_that_cannot_begin_reads_failed(machine):
     m = machine
     # Its worker's key is not where the settings say: the loop refuses to start.

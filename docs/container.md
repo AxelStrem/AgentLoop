@@ -115,8 +115,9 @@ variable. Nothing of the token or key is written to the settings, the logs or th
 ## What a redeploy does
 
 **A redeploy** stops the container, and every loop with it: the session at work is cut off, its
-changes left uncommitted in the clone, as after a kill. The new container's serve
-(`agentloop serve --restart-loops`) starts again each loop that was cut off. A loop you had stopped
-stays stopped. Each one lets go of the item its last run claimed, and picks from the queue again.
+changes left uncommitted in the clone, as after a kill. The new container's serve starts again
+each loop that was cut off, as `agentloop serve` does on every system (see "When serve starts" in
+[settings.md](settings.md)); the image still passes `--restart-loops`, which asks for what is now
+the default. A loop you had stopped stays stopped. Each one lets go of the item its last run claimed, and picks from the queue again.
 Settings, logins and each project's tools are in `/data` and the Homebrew volume, so they are
 still there.
