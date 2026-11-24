@@ -29,7 +29,7 @@ def said(text: str, handle: str, *comments: tuple[str, str, str]) -> str:
 
 def voiced(handle: str = "voiced", stage: str = "ready", **kwargs) -> str:
     return said(item(handle, stage, complexity="low", **kwargs), handle,
-                ("ap31", "", "Earlier words."), ("ap31", "", f"Listen: ![]({SOUND})"))
+                ("ap31", "", "Earlier words."), ("ap31", "", f"Listen: ![transcribe]({SOUND})"))
 
 
 def recorded(p) -> None:
@@ -132,7 +132,7 @@ def test_an_item_another_loop_has_claimed_is_left_to_it(project, fake_claude, he
     recorded(p)
     assert p.go() == 0
     assert fake_claude.calls() == [] and heard[0] == []
-    assert f"![]({SOUND})" in body_of(p, "voiced")
+    assert f"![transcribe]({SOUND})" in body_of(p, "voiced")
     assert p.show("voiced").get("working") == "true"
     assert not p.r.status.get("voiceProblem")
     assert not [line for line in p.lines if "could not be transcribed" in line]
@@ -149,7 +149,7 @@ def test_a_failed_transcription_is_said_once_and_the_loop_goes_on(project, fake_
     assert p.show("plain")["stage"] == "testing"
     said_lines = [line for line in p.lines if "could not be transcribed" in line]
     assert said_lines == ["  voiced: its voice message could not be transcribed - local Whisper is not set up. It is left held until the next run."]
-    assert f"![]({SOUND})" in body_of(p, "voiced")
+    assert f"![transcribe]({SOUND})" in body_of(p, "voiced")
     assert p.r.status["voiceProblem"] == "voiced: local Whisper is not set up"
     assert p.r.status["unheard"] == 1
 
@@ -161,7 +161,7 @@ def test_a_failed_cleanup_is_a_failure_of_that_item_only(project, fake_claude, h
     assert p.go() == 0
     assert len(fake_claude.calls()) == 1
     assert any("the cleanup call failed" in line for line in p.lines)
-    assert f"![]({SOUND})" in body_of(p, "voiced")
+    assert f"![transcribe]({SOUND})" in body_of(p, "voiced")
     assert not voice_records(p, "voiced")
 
 
@@ -170,7 +170,7 @@ def test_with_transcription_off_unheard_items_stay_held(project, fake_claude, he
     recorded(p)
     assert p.go() == 0
     assert fake_claude.calls() == [] and heard[0] == []
-    assert f"![]({SOUND})" in body_of(p, "voiced")
+    assert f"![transcribe]({SOUND})" in body_of(p, "voiced")
     assert p.r.status["transcribe"] is False and p.r.status["unheard"] == 1
     # Not an error: the item is only not free to take yet (item voice-tweaks).
     assert not p.r.status.get("voiceProblem")

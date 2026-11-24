@@ -18,9 +18,13 @@ the machine except the model's download, made once during setup.
 
 ## What a loop does with them
 
-A comment holding a recording keeps its item back - unheard, whoever it is for - until the
-recording is transcribed (`tracker.py sounds` lists those recordings, `next` names their items in
-`unheard`). A loop whose `transcribe` setting names an engine transcribes them before it takes an
+A comment holding a recording marked for transcription keeps its item back - unheard, whoever it
+is for - until the recording is transcribed (`tracker.py sounds` lists those recordings, `next`
+names their items in `unheard`). The mark is the "request transcription" box on the recording's
+player on the tracker page, which is ticked on a recording made on the page and unticked on an
+audio file dropped in; it is written into the comment as `![transcribe](sounds/...)`. A sound
+without it is not an instruction, and holds nothing. Once transcribed the mark reads
+`![transcribed](...)`. A loop whose `transcribe` setting names an engine transcribes them before it takes an
 item, and again while it waits for work with `autoStart` on, once the tracker changes:
 
 1. `tracker.py sounds --fetch` fetches the recordings into the loop's folder.
