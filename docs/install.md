@@ -97,7 +97,7 @@ no admin rights:
 
 | | |
 | --- | --- |
-| Windows | `agentloop-serve.vbs` in the Startup folder (`shell:startup`), which starts `serve` with its window hidden |
+| Windows | the value `AgentLoop serve` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which has `pythonw` run `agentloop-serve.pyw` in the app's data folder; that starts `serve` with no window. Task Manager lists it under Startup apps, where it can be turned off too. An older `on` wrote `agentloop-serve.vbs` to the Startup folder, which needs VBScript, which Windows is phasing out: `on` and `off` remove it |
 | macOS | `~/Library/LaunchAgents/io.github.axelstrem.agentloop.serve.plist` |
 | Linux | `~/.config/systemd/user/agentloop-serve.service`, enabled. Without a systemd user session, as in a container, nothing is written |
 

@@ -4,9 +4,13 @@ installers offer `on`, and the page names it while loops wait to come back.
 
 Each system has its own place, written for this user alone and needing no admin:
 
-- Windows: `agentloop-serve.vbs` in the user's Startup folder, which runs serve with its console
-  hidden. A hidden console rather than none (pythonw) because serve's loops start git and claude,
-  console programs, which would each open a window of their own under a process with no console.
+- Windows: a value under HKCU's `Run` key, which has pythonw run a small starter script,
+  `<data>/loginstart/agentloop-serve.pyw`; the starter runs serve with a console of its own and no
+  window (item loginstart-novbs). A hidden console rather than none because serve and its loops
+  start git and claude, console programs, which would each open a window of their own under a
+  process with no console. An older `on` wrote `agentloop-serve.vbs` to the Startup folder instead,
+  which needs VBScript, which Windows is phasing out: `on` and `off` remove it, and `status` says
+  when it is the one there.
 - macOS: a LaunchAgent, `~/Library/LaunchAgents/<LABEL>.plist`, with `RunAtLoad`.
 - Linux: a systemd user unit, `~/.config/systemd/user/agentloop-serve.service`, enabled for
   `default.target`. Where there is no systemd user session - a container, say - nothing is written.
@@ -18,8 +22,9 @@ and a second serve would only find the port taken. What runs is the absolute pat
 AGENTLOOP_HOME of the shell that ran `on` go with it, since launchd and systemd start their programs
 with a bare PATH that finds neither git nor claude.
 
-Only the Windows side is tried on a real login here; the files for macOS and Linux are tested as
-text, and their `systemctl` calls with stand-ins (item other-os tries them).
+The tests run the Windows starter for real, on a stand-in command, with the registry stood in for;
+the files for macOS and Linux are tested as text, and their `systemctl` calls with stand-ins (item
+other-os tries them).
 """
 
 from __future__ import annotations
@@ -36,7 +41,11 @@ from agentloop import build, config
 
 LABEL = "io.github.axelstrem.agentloop.serve"
 UNIT = "agentloop-serve.service"
-VBS = "agentloop-serve.vbs"
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_VALUE = "AgentLoop serve"
+STARTER = "agentloop-serve.pyw"
+# What an older `on` wrote to the Startup folder, removed wherever it is found.
+OLD_VBS = "agentloop-serve.vbs"
 # The variables the started serve is given, from the shell that ran `on`, where the system would
 # not pass them on.
 CARRIED = ("PATH", "AGENTLOOP_HOME")
@@ -53,6 +62,8 @@ class Status:
     path: Path | None
     # Why this machine cannot start serve at login, when it cannot.
     unsupported: str | None = None
+    # Something more the owner should know, as that an older login start is the one there.
+    note: str | None = None
 
 
 # What runs
@@ -98,36 +109,81 @@ def startup_folder() -> Path:
     return Path(roaming) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
 
-def _vbs_string(text: str) -> str:
-    return '"' + text.replace('"', '""') + '"'
+def starter_path() -> Path:
+    return config.paths().data / "loginstart" / STARTER
 
 
-def vbs_text(args: list[str], env: dict[str, str]) -> str:
-    """The script: each argument quoted on the command line WScript.Shell.Run is given. A Windows
-    path cannot hold a quote, so quoting each one whole is all the escaping it needs; Run starts the
-    program with its window hidden (0) and does not wait for it (False)."""
-    for arg in args:
-        if '"' in arg:
-            raise LoginStartError("an argument holds a quote, which a Windows command line cannot carry")
-    line = " ".join(f'"{arg}"' for arg in args)
-    lines = [
-        "' Written by agentloop login-start on: starts agentloop serve at login, with no window.",
-        "' agentloop login-start off removes it.",
-        'Set shell = CreateObject("WScript.Shell")',
-    ]
+def _pythonw() -> Path:
+    """The windowless Python beside the one this runs on: python.org's installs, venvs and uv's
+    tool environments all have one."""
+    return Path(sys.executable).with_name("pythonw.exe")
+
+
+def starter_text(args: list[str], env: dict[str, str]) -> str:
+    """The starter pythonw runs at login: serve's command with a console of its own and no window
+    (CREATE_NO_WINDOW), so that git and claude, which serve and its loops start, share that hidden
+    console rather than each opening a window. The arguments and the environment are Python
+    literals, so no command-line quoting applies to them. It needs nothing but the standard
+    library, as `-I` gives it no other."""
     # PATH is the user's own at login already; AGENTLOOP_HOME goes on only where it was set.
-    for name, value in env.items():
-        if name != "PATH":
-            lines.append(f'shell.Environment("Process")({_vbs_string(name)}) = {_vbs_string(value)}')
-    lines.append(f"shell.Run {_vbs_string(line)}, 0, False")
-    return "\r\n".join(lines) + "\r\n"
+    carried = {name: value for name, value in env.items() if name != "PATH"}
+    return "\n".join([
+        "# Written by agentloop login-start on: starts agentloop serve at login, with no window.",
+        "# agentloop login-start off removes it, and the Run value that starts it.",
+        "import os",
+        "import subprocess",
+        "",
+        f"ARGS = {args!r}",
+        f"ENV = {carried!r}",
+        "",
+        "os.environ.update(ENV)",
+        "subprocess.Popen(ARGS, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,",
+        "                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)",
+        "",
+    ])
 
 
-def _write_vbs(path: Path, text: str) -> None:
-    # Windows Script Host reads a script in the ANSI code page unless it is UTF-16 with a BOM, and
-    # a user's folder may be named in any script.
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+def run_command(pythonw: Path, starter: Path) -> str:
+    """The Run value: pythonw, isolated, on the starter. A Windows path cannot hold a quote, so
+    quoting each whole is all the escaping it needs."""
+    for path in (pythonw, starter):
+        if '"' in str(path):
+            raise LoginStartError("a path holds a quote, which a Windows command line cannot carry")
+    return f'"{pythonw}" -I "{starter}"'
+
+
+def _run_get() -> str | None:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, RUN_VALUE)
+    except FileNotFoundError:
+        return None
+    return str(value)
+
+
+def _run_set(command_line: str) -> None:
+    import winreg
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, RUN_VALUE, 0, winreg.REG_SZ, command_line)
+
+
+def _run_delete() -> bool:
+    """Removes the Run value; whether there was one."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, RUN_VALUE)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _has_vbscript() -> bool:
+    """Whether Windows Script Host could still run the .vbs an older login-start on wrote: VBScript
+    is a feature on demand from Windows 11 24H2, to be off by default and then removed."""
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return (Path(root) / "System32" / "vbscript.dll").is_file()
 
 
 # macOS
@@ -233,8 +289,16 @@ def status() -> Status:
     """Whether serve starts at login, from the files alone."""
     system = config.this_system()
     if system == "windows":
-        path = startup_folder() / VBS
-        return Status(system, path.is_file(), path)
+        if _run_get() is not None:
+            return Status(system, True, starter_path())
+        old = startup_folder() / OLD_VBS
+        if not old.is_file():
+            return Status(system, False, starter_path())
+        if _has_vbscript():
+            return Status(system, True, old, note="this is the VBScript start of an older agentloop, which Windows is "
+                                                  "phasing out: agentloop login-start on replaces it")
+        return Status(system, False, old, note=f"{OLD_VBS} is in the Startup folder, but this Windows has no VBScript "
+                                               "to run it: agentloop login-start on replaces it")
     if system == "macos":
         path = launch_agent()
         return Status(system, path.is_file(), path)
@@ -249,8 +313,17 @@ def turn_on(argv0: str | None = None) -> tuple[Path, list[str]]:
     env = carried_env()
     system = config.this_system()
     if system == "windows":
-        path = startup_folder() / VBS
-        _write_vbs(path, vbs_text(args, env))
+        pythonw = _pythonw()
+        if not pythonw.is_file():
+            raise LoginStartError("there is no pythonw.exe beside the Python agentloop runs on, which starts serve "
+                                  "with no window: nothing was written")
+        path = starter_path()
+        line = run_command(pythonw, path)
+        _write(path, starter_text(args, env).encode("utf-8"))
+        _run_set(line)
+        old = startup_folder() / OLD_VBS
+        if old.is_file():
+            old.unlink()
         return path, args
     if system == "macos":
         path = launch_agent()
@@ -280,8 +353,15 @@ def turn_off() -> Path | None:
     started at this login goes on until it is ended."""
     system = config.this_system()
     if system == "windows":
-        path = startup_folder() / VBS
-    elif system == "macos":
+        removed = None
+        if _run_delete():
+            removed = starter_path()
+        for path in (starter_path(), startup_folder() / OLD_VBS):
+            if path.is_file():
+                path.unlink()
+                removed = removed or path
+        return removed
+    if system == "macos":
         # Not booted out of launchd, which would end a serve it started at this login: without
         # the file, the next login does not load it.
         path = launch_agent()
@@ -316,6 +396,8 @@ def run(action: str) -> int:
         if action == "on":
             path, args = turn_on()
             print(f"on       serve starts at login, from {path}")
+            if config.this_system() == "windows":
+                print(f"         run by pythonw, from the value \"{RUN_VALUE}\" under HKCU\\{RUN_KEY}")
             print(f"runs     {' '.join(args)}")
             print("Nothing was started now: agentloop serve --open starts the page for this login.")
             return 0
@@ -326,8 +408,11 @@ def run(action: str) -> int:
         found = status()
         if found.on:
             print(f"on       {found.path}")
+            if found.note:
+                print(f"         {found.note}")
             return 0
-        print("off" + (f"      {found.unsupported}" if found.unsupported else ""))
+        reason = found.unsupported or found.note
+        print("off" + (f"      {reason}" if reason else ""))
         return 1
     except LoginStartError as error:
         print(f"agentloop login-start: {error}", file=sys.stderr)

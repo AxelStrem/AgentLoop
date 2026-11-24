@@ -1,9 +1,14 @@
 """Starting serve at login (item loginstart): the file each system gets, as text, and on, off and
-status with the home folder moved into the test's own and systemctl stood in for. Nothing here
-touches this machine's own Startup folder, LaunchAgents or systemd."""
+status with the home folder moved into the test's own, and the Run key and systemctl stood in for.
+Nothing here touches this machine's own Run key, Startup folder, LaunchAgents or systemd: the one
+test of the registry calls themselves uses a key of its own."""
+import ast
 import io
+import os
 import plistlib
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -14,8 +19,22 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
-    """Every place login-start writes, moved under tmp_path."""
+def run_key(tmp_path, monkeypatch):
+    """The Run key, stood in for by a dict, and a pythonw where every system can find one."""
+    values = {}
+    monkeypatch.setattr(loginstart, "_run_get", lambda: values.get(loginstart.RUN_VALUE))
+    monkeypatch.setattr(loginstart, "_run_set", lambda line: values.__setitem__(loginstart.RUN_VALUE, line))
+    monkeypatch.setattr(loginstart, "_run_delete", lambda: values.pop(loginstart.RUN_VALUE, None) is not None)
+    pythonw = tmp_path / "python" / "pythonw.exe"
+    pythonw.parent.mkdir()
+    pythonw.write_text("", encoding="utf-8")
+    monkeypatch.setattr(loginstart, "_pythonw", lambda: pythonw)
+    return values
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch, run_key):
+    """Every place login-start writes, moved under tmp_path, and the Run key stood in for."""
     folder = tmp_path / "home"
     folder.mkdir()
     monkeypatch.setattr(Path, "home", staticmethod(lambda: folder))
@@ -89,22 +108,50 @@ def test_serve_args_log_to_the_app_log_folder(home, tmp_path):
 
 # The files, as text
 
-def test_vbs_runs_each_argument_quoted_and_hidden():
-    text = loginstart.vbs_text([r"C:\Users\Анна Б\bin\agentloop.exe", "serve", "--log", r"C:\a & b\serve.log"],
-                               {"PATH": "x", "AGENTLOOP_HOME": r"D:\al"})
-    lines = text.split("\r\n")
-    assert lines[2] == 'Set shell = CreateObject("WScript.Shell")'
-    assert 'shell.Environment("Process")("AGENTLOOP_HOME") = "D:\\al"' in lines
+def _starter_globals(text: str) -> dict:
+    """What the starter's ARGS and ENV come to, read without running what it starts."""
+    tree = ast.parse(text)
+    found = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            found[node.targets[0].id] = ast.literal_eval(node.value)
+    return found
+
+
+def test_starter_holds_the_arguments_as_they_are():
+    args = [r"C:\Users\Анна Б\bin\agentloop.cmd", "serve", "--log", r"C:\a & b\100% \"x\"\serve.log"]
+    text = loginstart.starter_text(args, {"PATH": "x", "AGENTLOOP_HOME": r"D:\al'b"})
+    compile(text, "agentloop-serve.pyw", "exec")
     # PATH is the user's own at login already.
-    assert not any("PATH" in line for line in lines if not line.startswith("'"))
-    assert ('shell.Run """C:\\Users\\Анна Б\\bin\\agentloop.exe"" ""serve"" ""--log"" '
-            '""C:\\a & b\\serve.log""", 0, False') in lines
-    assert text.endswith("\r\n")
+    assert _starter_globals(text) == {"ARGS": args, "ENV": {"AGENTLOOP_HOME": r"D:\al'b"}}
+    assert "subprocess.CREATE_NO_WINDOW" in text
 
 
-def test_vbs_refuses_a_quote():
+def test_run_command_quotes_both_paths_and_refuses_a_quote():
+    pythonw, starter = Path("C:/Program Files/Python/pythonw.exe"), Path("C:/Users/Анна Б/agentloop-serve.pyw")
+    assert loginstart.run_command(pythonw, starter) == f'"{pythonw}" -I "{starter}"'
     with pytest.raises(loginstart.LoginStartError):
-        loginstart.vbs_text(['C:\\a"b\\agentloop.exe', "serve"], {})
+        loginstart.run_command(Path('C:/a"b/pythonw.exe'), Path("C:/s.pyw"))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="pythonw and CREATE_NO_WINDOW are Windows things")
+def test_starter_runs_its_command_with_a_hidden_console(tmp_path):
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    if not pythonw.is_file():
+        pytest.skip("no pythonw.exe beside this Python")
+    # A stand-in for serve: it says whether it has a console (GetConsoleCP is 0 without one) and
+    # whether that console has a window (GetConsoleWindow is 0 for a hidden one).
+    out = tmp_path / "Анна Б" / "out.txt"
+    out.parent.mkdir()
+    probe = ("import ctypes, sys; k = ctypes.windll.kernel32; "
+             "open(sys.argv[1], 'w').write(f'{k.GetConsoleCP() != 0} {k.GetConsoleWindow() != 0} {sys.argv[2]}')")
+    starter = tmp_path / "agentloop-serve.pyw"
+    starter.write_text(loginstart.starter_text([sys.executable, "-c", probe, str(out), "a & b"], {}), encoding="utf-8")
+    subprocess.run([str(pythonw), "-I", str(starter)], timeout=60, check=True)
+    deadline = time.monotonic() + 60
+    while not (out.is_file() and out.read_text(encoding="utf-8")) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert out.read_text(encoding="utf-8") == "True False a & b"
 
 
 def test_plist_runs_the_arguments_at_load():
@@ -131,18 +178,74 @@ def test_unit_refuses_a_line_break():
 
 # On, off and status
 
-def test_windows_on_off(home, monkeypatch):
+@pytest.mark.skipif(sys.platform != "win32", reason="the registry is a Windows thing")
+def test_registry_calls_on_a_key_of_their_own(monkeypatch):
+    import winreg
+    # A key of the test's own, never the Run key, whose values would run at the next login.
+    key = rf"Software\agentloop-test-{os.getpid()}"
+    monkeypatch.setattr(loginstart, "RUN_KEY", key)
+    try:
+        assert loginstart._run_get() is None and loginstart._run_delete() is False
+        loginstart._run_set('"C:/Анна Б/pythonw.exe" -I "C:/s.pyw"')
+        assert loginstart._run_get() == '"C:/Анна Б/pythonw.exe" -I "C:/s.pyw"'
+        assert loginstart._run_delete() is True and loginstart._run_get() is None
+    finally:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+
+
+def _old_vbs(home) -> Path:
+    path = home / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / loginstart.OLD_VBS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe")
+    return path
+
+
+def test_windows_on_off(home, monkeypatch, tmp_path, run_key):
     _system(monkeypatch, "windows")
     assert not loginstart.status().on
     path, args = loginstart.turn_on()
-    assert path == home / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "agentloop-serve.vbs"
-    data = path.read_bytes()
-    assert data.startswith(b"\xff\xfe")
-    assert data[2:].decode("utf-16-le") == loginstart.vbs_text(args, loginstart.carried_env())
-    assert loginstart.status().on
+    assert path == tmp_path / "app" / "data" / "loginstart" / "agentloop-serve.pyw"
+    assert path.read_text(encoding="utf-8") == loginstart.starter_text(args, loginstart.carried_env())
+    assert run_key == {loginstart.RUN_VALUE: f'"{tmp_path / "python" / "pythonw.exe"}" -I "{path}"'}
+    found = loginstart.status()
+    assert found.on and found.path == path and found.note is None
     assert loginstart.turn_off() == path
-    assert not path.exists() and not loginstart.status().on
+    assert not path.exists() and run_key == {} and not loginstart.status().on
     assert loginstart.turn_off() is None
+
+
+def test_windows_on_needs_pythonw(home, monkeypatch, tmp_path, run_key):
+    _system(monkeypatch, "windows")
+    monkeypatch.setattr(loginstart, "_pythonw", lambda: tmp_path / "none" / "pythonw.exe")
+    with pytest.raises(loginstart.LoginStartError, match="pythonw"):
+        loginstart.turn_on()
+    assert run_key == {} and not loginstart.starter_path().exists()
+
+
+def test_windows_on_and_off_remove_the_old_vbs(home, monkeypatch):
+    _system(monkeypatch, "windows")
+    old = _old_vbs(home)
+    loginstart.turn_on()
+    assert not old.exists()
+    old = _old_vbs(home)
+    loginstart.turn_off()
+    assert not old.exists()
+    # The old start alone is removed too, and named.
+    old = _old_vbs(home)
+    assert loginstart.turn_off() == old and not old.exists()
+
+
+@pytest.mark.parametrize("vbscript", [True, False])
+def test_windows_status_names_the_old_vbs(home, monkeypatch, capsys, vbscript):
+    _system(monkeypatch, "windows")
+    monkeypatch.setattr(loginstart, "_has_vbscript", lambda: vbscript)
+    old = _old_vbs(home)
+    found = loginstart.status()
+    # Without VBScript the old start does nothing at login, so it is off, and the page says to run on.
+    assert found.on is vbscript and found.path == old
+    assert "login-start on replaces it" in found.note
+    assert cli.main(["login-start", "status"]) == (0 if vbscript else 1)
+    assert "login-start on replaces it" in capsys.readouterr().out
 
 
 def test_macos_on_off(home, monkeypatch):
