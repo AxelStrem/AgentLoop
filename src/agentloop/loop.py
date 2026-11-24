@@ -70,6 +70,20 @@ Differences from the script, each deliberate:
   in a session - until the window resets or going on past it is approved (`_pause`). The script
   has none; its `-StopAtWeeklyUse` (`Test-WeekUsed`) stopped the loop at a share of the week, and
   is retired here: a worker's weekly limit pauses its loops there instead.
+- With the run setting `transcribe` naming an engine, the voice messages that hold items back are
+  transcribed before an item is taken, and in the idle wait as the tracker changes (item
+  voice-loop, `hear`): the engine (voice.py), then a one-turn call with no tools on the `voice`
+  route makes the text clear English, which `tracker.py heard` writes under the recording, with a
+  work record of kind `voice`. The item is claimed while it is transcribed and let go of after,
+  without being made this loop's account's; one claimed already is left alone (item voice-tweaks).
+  Nothing is moved or committed. The script has no voice messages.
+- A loop waiting for work in its idle wait takes a seat on its tracker's bench, `project/Bench`,
+  and gives it up as the wait ends, for the page to show who is waiting (item projbench,
+  `tracker.py bench`). The seat is `<account>@<machine>/<loop>`; a run gives up its own once as it
+  first reads the tracker, clearing one a killed run left. The script has no bench.
+- An item flagged trusted is finished by the loop once it is at testing (item trusted-item,
+  `finish_trusted`): after the session's work record, and before each pick for one that came to
+  testing otherwise. The script has no trusted flag.
 - Only Windows has been tried: this machine is Windows.
 """
 
@@ -79,6 +93,7 @@ import contextlib
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -88,7 +103,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-from agentloop import accounts, brew, colours, commits, config, definition, session, setup, sync, tools, usage, watch
+from agentloop import accounts, brew, colours, commits, config, definition, session, setup, sync, tools, usage, voice, watch
 
 # The pause between clean iterations, in seconds.
 COOLDOWN = 5
@@ -154,6 +169,13 @@ def _flags(item: dict | None) -> list[str]:
     return [f.strip() for f in str((item or {}).get("flags") or "").split(",") if f.strip()]
 
 
+def _free(item: dict | None) -> bool:
+    """Whether an item as `show --json` gives it is one the queue could offer: open, waiting on
+    nothing, and held for no person by a manual or asked flag."""
+    return (bool(item) and not item.get("closed") and not item.get("waiting")
+            and not any(f in ("manual", "asked") for f in _flags(item)))
+
+
 def _slashes(path) -> str:
     return str(path).replace("\\", "/")
 
@@ -202,8 +224,28 @@ def claims_path(folder: Path) -> Path:
     return folder / "claims.json"
 
 
+def _tracker_command() -> list[str]:
+    """tracker.py run as an import rather than as a script: Python keeps an imported module's
+    bytecode beside it, and compiles a script anew every time - ~20 ms of each of the ten or so
+    calls an item takes (trackerstart). Its folder takes the place `-c` gives the current one on
+    the module path, so the tool sees the path a script would. Where the folder cannot be written,
+    it is compiled each time, as before."""
+    script = tools.path("tracker.py")
+    return [sys.executable, "-c",
+            f"import sys; sys.path[0] = {str(script.parent)!r}; sys.argv[0] = {str(script)!r}; "
+            "import tracker; tracker.main()"]
+
+
+def _moment(written) -> datetime | None:
+    """A comment's `at` as a moment, however the server wrote it, for finding a comment by it."""
+    try:
+        return datetime.fromisoformat(str(written).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _run_tracker(tracker: str, env: dict[str, str | None], *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(tools.path("tracker.py")), "--doc", tracker, *args],
+    return subprocess.run([*_tracker_command(), "--doc", tracker, *args],
                           capture_output=True, env=session.build_env(env))
 
 
@@ -548,14 +590,29 @@ class Run:
         self.variables: dict[str, str | None] = {}
         self.scratch: Path | None = None
         self._beside: list[str] | None = None
+        # What the project says about its tags, read once a run: it is the same answer for every
+        # item, and a tracker.py call is most of an item's overhead (trackerstart).
+        self._tags: dict | None = None
+        # The item as complete_session last read it, for invoke_item to go on from without
+        # reading it again; None once a merge session may have changed it.
+        self.last_shown: dict | None = None
         self.status: dict = {}
         # The items this run holds now, and the one a session could not have: another loop's.
         self.claimed: set[str] = set()
         self.taken: str | None = None
+        # Why the last claim was refused, in tracker.py's words, when it was not another loop's.
+        self.refused = ""
         # The conflict a merge phase is asked to resolve.
         self.conflict: sync.Conflict | None = None
         # The tracker's watch stream while the loop is idle, for a test to see.
         self.watcher: watch.Watcher | None = None
+        # The items whose voice messages could not be transcribed this run, and why: skipped for
+        # the rest of it, said once (item voice-loop).
+        self.unheard_failed: dict[str, str] = {}
+        # Whether this run has given up the seat on the bench a killed run of the loop may have
+        # left, and whether a sit or a leave has failed - said once a run (item projbench).
+        self.bench_cleared = False
+        self.bench_failed = False
 
     def _status(self, **changes) -> None:
         """status.json, for the page: written on each change, whole."""
@@ -613,7 +670,8 @@ class Run:
         # replaces the last, so a mention taken back clears the warning. A dry run, whose status a run never
         # began, writes none.
         if answer is not None and self.status:
-            self._status(account=answer.get("me"), others=answer.get("others") or [])
+            self._status(account=answer.get("me"), others=answer.get("others") or [],
+                         unheard=len(answer.get("unheard") or []))
         return answer
 
     def _tracker_text(self, *args: str) -> str:
@@ -629,14 +687,22 @@ class Run:
         else:
             remove(self.claims_file)
 
-    def claim(self, handle: str, worker: str | None = None) -> bool | None:
+    def claim(self, handle: str, worker: str | None = None, hold_only: bool = False) -> bool | None:
         """Marks the item as this loop's for its session, with `worker` - who works it - for the
-        page to show: True when it is, False when another loop has it already, None when tracker.py
-        could not say."""
-        said = self.read_tracker("claim", handle, *(("--worker", worker) if worker else ()))
+        page to show: True when it is, False when another loop has it already or it is for another
+        account (item for-col) - `refused` saying which - None when tracker.py could not say.
+        `hold_only` only holds it against other loops, whoever it is for, and does not make it
+        this account's: what transcribing it takes (item voice-tweaks)."""
+        self.refused = ""
+        said = self.read_tracker("claim", handle, *(("--worker", worker) if worker else ()),
+                                 *(("--hold-only",) if hold_only else ()))
         if not said:
             return None
         if not said.get("claimed"):
+            # tracker.py's own refusal only when it is not the claim button's, which the line
+            # has always put as another loop at work.
+            refusal = str(said.get("refused") or "")
+            self.refused = refusal if refusal.startswith("it is for ") else ""
             return False
         self.claimed.add(handle)
         self._write_claims()
@@ -659,10 +725,12 @@ class Run:
         """The item as tracker.py show prints it, and what the project says about the tags it
         carries (`Get-ItemContext`)."""
         h = item["handle"]
-        shown = self._tracker_text("show", h).strip()
-        text = f"\n\nThe item, as tracker.py show {h} prints it now:\n\n{shown}\n"
+        # One call for both: `show --json` carries the text `show` prints. Its lines are joined
+        # with a line feed, as _tracker_text joins them.
         details = self.read_tracker("show", h, "--json")
-        tags = self.read_tracker("tag", "--json")
+        shown = "\n".join(str((details or {}).get("text") or "").splitlines()).strip()
+        text = f"\n\nThe item, as tracker.py show {h} prints it now:\n\n{shown}\n"
+        tags = self.tags()
         if tags:
             carried = [t.strip() for t in str((details or {}).get("labels") or "").split(",")] if details and details.get("labels") else []
             said, others = [], []
@@ -678,6 +746,13 @@ class Run:
             if others:
                 text += f"\nOther tags with something to say: {', '.join(others)} - tracker.py tag <tag> prints what one says, should the work turn out to reach that part.\n"
         return text + "\n"
+
+    def tags(self) -> dict | None:
+        """`tracker.py tag --json`, read the first time it is asked for in a run; a read that
+        failed is tried again next time."""
+        if self._tags is None:
+            self._tags = self.read_tracker("tag", "--json")
+        return self._tags
 
     def beside(self) -> list[str]:
         if self._beside is None:
@@ -820,12 +895,29 @@ class Run:
             said = (done.stdout + done.stderr).decode("utf-8", errors="replace").strip()
             self.say(f"  The session's record could not be written to the tracker: {said}", "DarkYellow")
 
+    def finish_trusted(self, now: dict | None = None) -> None:
+        """The items flagged trusted that are at testing, finished (item trusted-item): the owner
+        trusts them to be done right, so the testing comment is their record and no person reads it
+        first. Given the item a session has just left - `now` - only when it is such an item; with
+        none, every such item, for one a person moved to testing by hand, or a parent the template
+        moved on from parts. Always after the session's work record, which History keeps with the
+        item but `tracker.py work` cannot reach once it is there. A failure leaves the item at
+        testing, said as a warning. The script has no trusted flag."""
+        if now is not None and (now.get("closed") or now.get("stage") != "testing" or "trusted" not in _flags(now)):
+            return
+        done = self._tracker("finish")
+        said = done.stdout.decode("utf-8", errors="replace").strip().splitlines()
+        for line in said:
+            self.say(f"  {line}, as it is trusted", "Green")
+        if done.returncode != 0:
+            why = (done.stderr.decode("utf-8", errors="replace").strip().splitlines() or ["no reason given"])[-1]
+            self.say(f"  A trusted item could not be finished, and is left at testing: {why}", "DarkYellow")
+
     def note_outcome(self, item: dict, route: dict, now: dict | None) -> None:
         """What a session that finished did with its item (`Note-Outcome`): counted when it left it
         at the stage it took it at and still free to take; forgotten otherwise."""
         h = item["handle"]
-        free = bool(now) and not now.get("closed") and not now.get("waiting") and not any(f in ("manual", "asked") for f in _flags(now))
-        if free and now.get("stage") == item.get("stage"):
+        if _free(now) and now.get("stage") == item.get("stage"):
             key = f"{item.get('stage')} {route['model']}"
             times = self.seen[h]["times"] + 1 if h in self.seen and self.seen[h]["key"] == key else 1
             self.seen[h] = {"key": key, "times": times}
@@ -990,7 +1082,7 @@ class Run:
             return False
         if not held:
             self.taken = item["handle"]
-            self.say(f"  {item['handle']}: another loop is working on it - left to it.", "DarkYellow")
+            self.say(f"  {item['handle']}: {self.refused or 'another loop is working on it'} - left to it.", "DarkYellow")
             return True
         self._status(item=item["handle"], title=item.get("title"), kind=kind, session=session_id)
         # The session's variables: that author, and where an item it files into another project
@@ -1005,6 +1097,7 @@ class Run:
         finally:
             self.release(item["handle"])
         now = self.read_tracker("show", item["handle"], "--json")
+        self.last_shown = now
         # Killed: during a wait, or with its claude ended mid-session - whatever it last said.
         killed = self.killed or self._killed()
         failed = not final or bool(final.get("is_error"))
@@ -1053,6 +1146,7 @@ class Run:
         # The item it would go on to, given what it has read: taken up by the loop if it can be.
         self.suggested = lines.next
         self.add_work_record(before, item, kind, route, now)
+        self.finish_trusted(now)
         done = commits.commit_session(before, message, self.repos)
         for said in done.said:
             self.say("  " + said, "DarkGreen" if said.startswith("committed") else "DarkYellow")
@@ -1104,6 +1198,8 @@ class Run:
     def resolve_conflict(self, conflict: sync.Conflict, item: dict, route: dict, session_id: str) -> str | None:
         """The session that made a commit resumed to resolve the conflict replaying it: None once
         it did, or why not."""
+        # The session may change the item: what complete_session read of it is stale.
+        self.last_shown = None
         self.say(f"  {conflict.repo.name}: replaying {conflict.commit} onto {conflict.upstream} conflicts in {', '.join(conflict.files)}; the session resolves it.", "Yellow")
         self.conflict = conflict
         before = {repo: commits.changed(repo) for repo in self.repos}
@@ -1148,9 +1244,15 @@ class Run:
         # A triage that leaves its item ready at a complexity worth the larger model, or small, goes
         # on to build it, resumed at the same model and effort: the conversation so far is still in
         # the cache, and what it read for the plan is what the build needs.
-        now = self.read_tracker("show", item["handle"], "--json")
+        # The item as complete_session has just read it: nothing since has changed it, unless a merge
+        # session ran, which forgets it.
+        now = self.last_shown if self.last_shown and self.last_shown.get("handle") == item["handle"] else None
+        now = now or self.read_tracker("show", item["handle"], "--json")
         small = bool(now) and points_of(now) <= self._s("buildInTriageUpTo")
-        if (kind == "triage" and now and now.get("stage") == "ready"
+        # Only an item the queue would offer now: one the triage left waiting on another item, or
+        # held for a person, is not built in the same session either (`Invoke-Item` builds it
+        # regardless; the queue's rule is the one kept here).
+        if (kind == "triage" and _free(now) and now.get("stage") == "ready"
                 and (now.get("complexity") in self._s("buildAfterTriage") or small) and not self.trial_applies(now)):
             # Past the worker's own limit, the build waits until it resets or going on is approved.
             if self._pause(between=False) is not None:
@@ -1213,6 +1315,183 @@ class Run:
         if line:
             self.say("  " + line, "DarkCyan")
 
+    # Voice messages (item voice-loop). The script has none.
+
+    def transcribing(self) -> bool:
+        return str((self._s("transcribe") or {}).get("engine") or "off") != "off"
+
+    def hear(self, answer: dict | None) -> dict | None:
+        """next's answer, once the voice messages of the items it names as unheard are transcribed
+        - asked again after them, so that the items they held are free to take. With transcription
+        off they stay held, for a loop that transcribes. An item whose transcription failed is not
+        tried again this run. A round that wrote nothing ends it: what is left cannot be heard now."""
+        for _ in range(3):
+            if not answer or not self.transcribing():
+                return answer
+            waiting = [h for h in answer.get("unheard") or [] if h not in self.unheard_failed]
+            if not waiting or not self.transcribe(waiting):
+                return answer
+            answer = self.read_next()
+        return answer
+
+    def _voice_failed(self, handle: str, why: str) -> None:
+        self.unheard_failed[handle] = why
+        self.say(f"  {handle}: its voice message could not be transcribed - {why}. It is left held until the next run.", "DarkYellow")
+        self._status(voiceProblem=f"{handle}: {why}")
+
+    def transcribe(self, handles: list[str]) -> bool:
+        """The sounds on those items transcribed and cleaned up, each written under its recording,
+        with a work record of kind voice on its item. True when one was written.
+
+        Each item is claimed while its sounds are transcribed - with --hold-only, which leaves who
+        it is for as it was - and let go of after, so that no other loop works or transcribes it
+        meanwhile (item voice-tweaks). One another loop has claimed is left to it, and is not a
+        failure: it is transcribed once it is free, by whichever loop sees it first. Nothing is
+        moved or committed."""
+        folder = self.loop_dir / "voice"
+        folder.mkdir(parents=True, exist_ok=True)
+        done = _run_tracker(self.tracker, {**self.tracker_env, "AGENT_SCRATCH": _slashes(folder)}, "sounds", "--fetch")
+        try:
+            sounds = json.loads(done.stdout.decode("utf-8", errors="replace")) if done.returncode == 0 else None
+        except ValueError:
+            sounds = None
+        if not isinstance(sounds, list):
+            self.say("  tracker.py could not list the voice messages to transcribe; they wait for the next look.", "DarkYellow")
+            return False
+        wrote = False
+        people: list[dict] | None = None
+        setting = dict(self._s("transcribe"))
+        # The item claimed for its sounds, and those that could not be: `sounds` lists an item's
+        # sounds one after another, so each is claimed once and let go of before the next.
+        holding: str | None = None
+        passed: set[str] = set()
+        try:
+            for sound in sounds:
+                h = str(sound.get("handle") or "")
+                if h not in handles or h in self.unheard_failed or h in passed:
+                    continue
+                if h != holding:
+                    if holding:
+                        self.release(holding)
+                        holding = None
+                    got = self.claim(h, f"transcribing ({setting.get('engine')})", hold_only=True)
+                    if not got:
+                        passed.add(h)
+                        why = "another loop is working on it" if got is False else "tracker.py could not claim it"
+                        self.say(f"  {h}: its voice messages are not transcribed now - {why}.", "DarkGray")
+                        continue
+                    holding = h
+                if not sound.get("file"):
+                    self._voice_failed(h, f"the server has no recording {sound.get('path')}")
+                    continue
+                self.say(f"  {h}: transcribing the voice message of {sound.get('author') or 'someone'} with {setting.get('engine')}", "Cyan")
+                try:
+                    heard = voice.transcribe(Path(str(sound["file"])), setting)
+                except voice.VoiceError as error:
+                    self._voice_failed(h, str(error))
+                    continue
+                except OSError as error:
+                    self._voice_failed(h, f"the engine could not be run ({type(error).__name__})")
+                    continue
+                if not str(heard.get("text") or "").strip():
+                    self._voice_failed(h, "the engine heard no words in it")
+                    continue
+                if people is None:
+                    listed = self.read_tracker("people")
+                    people = listed if isinstance(listed, list) else []
+                cleaned = self._clean_up(sound, heard, people)
+                if cleaned is None:
+                    # A usage limit: the next session waits it out, and the sound is heard after it.
+                    return wrote
+                if isinstance(cleaned, str):
+                    self._voice_failed(h, cleaned)
+                    continue
+                text, route, r = cleaned
+                words = folder / f"heard-{uuid.uuid4().hex}.md"
+                words.write_bytes(voice.transcript_text(text).encode("utf-8"))
+                try:
+                    written = self._tracker("heard", h, str(sound.get("at") or ""), str(sound.get("path") or ""), f"@{_slashes(words)}")
+                finally:
+                    remove(words)
+                if written.returncode != 0:
+                    said = written.stderr.decode("utf-8", errors="replace").strip().splitlines()
+                    self._voice_failed(h, f"tracker.py would not write it: {said[-1] if said else 'no reason given'}")
+                    continue
+                wrote = True
+                self._voice_record(h, heard, text, route, r)
+        finally:
+            if holding:
+                self.release(holding)
+            # The recordings fetched are of no more use: one not heard is fetched again next time.
+            for left in (folder / "tracker-sounds").rglob("*"):
+                if left.is_file():
+                    remove(left)
+        return wrote
+
+    def _voice_record(self, handle: str, heard: dict, text: str, route: dict, r: session.SessionResult) -> None:
+        """A transcription said in the output, counted in the run's cost, and recorded on its item
+        as a work record of kind voice, so that what it cost shows in Stats."""
+        cost = r.spent.cost
+        self.run_cost += cost
+        self._status(cost=round(self.run_cost, 4))
+        language = heard.get("language") or "language not said"
+        self.say(f"  {handle}: voice message transcribed ({language}), {len(text)} characters, cleaned up on "
+                 f"{route_name(route)} for ${figure(round(cost, 2))}.", "Green")
+        record = self._tracker("work", handle, "--kind", "voice", "--model", signature(r.model or route["model"], route),
+                               "--cost", figure(round(cost, 2)), "--read", str(round((r.spent.read + r.spent.input) / 1000)),
+                               "--written", str(round(r.spent.write / 1000)), "--output", str(round(r.spent.output / 1000)),
+                               "--turns", str(r.turns), "--minutes", figure(round(r.ms / 60000, 1)))
+        if record.returncode != 0:
+            said = (record.stdout + record.stderr).decode("utf-8", errors="replace").strip()
+            self.say(f"  The transcription's record could not be written to the tracker: {said}", "DarkYellow")
+
+    def _clean_up(self, sound: dict, heard: dict, people: list[dict]) -> tuple[str, dict, session.SessionResult] | str | None:
+        """The one-turn call on the voice route that makes a transcript clear English: its text,
+        the route and what it used; why not, when it failed; None when a usage limit stopped it."""
+        h = str(sound.get("handle"))
+        shown = self.read_tracker("show", h, "--json")
+        if not shown:
+            return f"tracker.py could not show {h}"
+        at = _moment(sound.get("at"))
+        comments = shown.get("comments") or []
+        mine = next((i for i, c in enumerate(comments) if at is not None and _moment(c.get("at")) == at), None)
+        if mine is None:
+            return "the comment that holds it is gone"
+        route = self.routes["voice"]
+        prompt = voice.cleanup_prompt(
+            description=self.project_def.description, handle=h, title=str(shown.get("title") or ""),
+            before=comments[:mine], comment=str(comments[mine].get("body") or ""), people=people, heard=heard,
+            author=str(sound.get("author") or comments[mine].get("author") or "someone"))
+        folder = self.loop_dir / "voice"
+        session_id = str(uuid.uuid4())
+        variables = session.session_variables(
+            author=signature(route["model"], route), scratch=folder, tracker=self.tracker,
+            item=f"{Path(self.tracker).stem}:{h}", claude=self.worker.claude, overseer=self.overseer,
+            sign_in=self.worker.sign_in, project_env=self.project_env)
+        spec = session.SessionSpec(
+            claude=self.claude, session_id=session_id, resume=False, prompt=prompt,
+            route=session.Route(route["model"], route.get("effort") or None), workdir=folder,
+            system_file=None, settings=None, log=self.log_dir / f"loop-{self.started_at}-voice.jsonl",
+            variables=variables, one_turn=True)
+        try:
+            r = session.run_session(spec, on_start=self.on_start)
+        except OSError as error:
+            return f"claude could not be run for the cleanup ({type(error).__name__})"
+        finally:
+            # Nothing to carry on from: the call is over once it has answered.
+            with contextlib.suppress(OSError):
+                session.remove_transcript(session_id, self.worker.claude)
+        if r.rate:
+            self._took_rate(r.rate)
+        if usage.limited(r, per_use=self.worker.sign_in_kind == "apiKey"):
+            self.say(f"  {h}: its voice message waits - {self.worker.name} is at a usage limit.", "DarkYellow")
+            return None
+        final = r.final
+        text = str((final or {}).get("result") or "").strip()
+        if not final or final.get("is_error") or not text:
+            return f"the cleanup call failed ({(final or {}).get('subtype') or 'no result'})"
+        return text, route, r
+
     # The whole run
 
     def _prepare(self) -> None:
@@ -1249,7 +1528,8 @@ class Run:
             self.status = {}
             self._status(loop=self.loop.name, project=self.project, worker=self.worker.name, state="running", pid=os.getpid(),
                          started=self._now(), item=None, title=None, kind=None, session=None, cost=0.0,
-                         usage=None, until=None, limit=None, ended=None, exit=None, killed=False, error=None)
+                         usage=None, until=None, limit=None, ended=None, exit=None, killed=False, error=None,
+                         transcribe=self.transcribing(), unheard=0, voiceProblem=None)
             code = 1
             error = None
             try:
@@ -1324,7 +1604,11 @@ class Run:
             self.say(f" Iteration {self.iteration}...", "Yellow")
             self.say("----------------------------------------", "Yellow")
 
-            item = self.read_next()
+            # Trusted items at testing are finished first, so that a parent they bring to testing
+            # is too; then voice messages are transcribed, so that the items they held can be taken.
+            self.finish_trusted()
+            item = self.hear(self.read_next())
+            self._clear_seat()
             if not item:
                 self.say("tracker.py could not say what comes next. Stopping.", "Red")
                 status = 1
@@ -1432,6 +1716,10 @@ class Run:
         look_at = wait()
         failing = False
         heard: list[str] = []
+        # On the bench before the stream is opened: the sit is then the version it opens on, not a
+        # change that would make this loop look again. Another idle loop's sit or leave is a change
+        # it hears - one look, which writes nothing, so loops cannot set each other off.
+        self.bench("sit")
         watcher = self._watcher(heard.append)
         # The count of changes looked at, and the one heard last with when it was first seen.
         looked, counted, since = 0, 0, self.clock.now()
@@ -1460,7 +1748,9 @@ class Run:
                     looked = counted
                     if self.lock:
                         self.lock.retake()
-                    item = self.read_next()
+                    # What changed may be a trusted item a person moved to testing.
+                    self.finish_trusted()
+                    item = self.hear(self.read_next())
                     if item and not item.get("signal"):
                         self._status(state="running", until=None, watching=False)
                         return item
@@ -1473,6 +1763,32 @@ class Run:
             watcher.stop()
             self.watcher = None
             self._status(watching=False)
+            # Off the bench however the wait ends: work found, a stop, a kill, the toggle, an error.
+            self.bench("leave")
+
+    def seat(self) -> str:
+        """The loop's seat on the bench, as `tracker.py bench --loop` takes it: the machine and the
+        loop. tracker.py puts the account the key signs in as before it, so that each loop anywhere
+        has one seat."""
+        return f"{socket.gethostname()}/{self.loop.name}"
+
+    def bench(self, action: str) -> bool:
+        """`tracker.py bench sit` or `leave`, for the seat. Only for the page, so a failure is
+        said once a run and never stops the loop."""
+        done = self._tracker("bench", action, "--loop", self.seat())
+        if done.returncode == 0:
+            return True
+        if not self.bench_failed:
+            self.bench_failed = True
+            self.say(" The loop's seat on the tracker's bench could not be written; it waits all the same.", "DarkYellow")
+        return False
+
+    def _clear_seat(self) -> None:
+        """Once a run, as it first reads the tracker: the seat a run of this loop that was killed
+        in its wait left behind, given up, since no `finally` of that run did."""
+        if not self.bench_cleared:
+            self.bench_cleared = True
+            self.bench("leave")
 
     def _watcher(self, say: Callable[[str], None]) -> watch.Watcher:
         """The stream of the tracker the loop works, opened for one wait, on the server and with

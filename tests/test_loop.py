@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import AGENT
 from agentloop import accounts, colours, config, loop, session, tools, usage
 
 
@@ -376,6 +377,41 @@ def test_a_small_item_is_built_by_its_triage(project, fake_claude):
     assert len(calls) == 2 and calls[1]["resume"]
 
 
+def test_a_triage_that_leaves_its_item_waiting_does_not_build_it(project, fake_claude):
+    # Ready at a complexity that would be built in the same session, but waiting on beta: the
+    # queue would not offer it, so the session ends with the triage.
+    p = project(item("alpha"), item("beta", "later"))
+    p.play(p.scene(move("alpha", "ready", "medium", 3), {"fake": "tracker", "args": ["after", "alpha", "beta"]},
+                   result="COMMIT: alpha: triaged"))
+    p.go()
+    assert len(fake_claude.calls()) == 1
+    assert "  build, in the same session" not in p.lines
+    assert p.show("alpha")["stage"] == "ready"
+
+
+def test_a_trusted_item_is_finished_once_it_reaches_testing(project, fake_claude):
+    # Finished after its work record, which goes to History with it; a plain item stays at
+    # testing for a person (item trusted-item).
+    p = project(item("alpha", "ready", complexity="low", flags="trusted"), item("beta", "ready", complexity="low"))
+    p.play(p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"),
+           p.scene(move("beta", "testing"), result="COMMIT: beta: built"))
+    assert p.go() == 0
+    alpha = p.show("alpha")
+    assert alpha["closed"] and alpha.get("status", "finished") == "finished"
+    assert [w["moved"] for w in alpha["work"]] == ["ready > testing"]
+    assert "  alpha: testing -> finished, as it is trusted" in p.lines
+    beta = p.show("beta")
+    assert not beta["closed"] and beta["stage"] == "testing"
+
+
+def test_a_trusted_item_a_person_left_at_testing_is_finished_before_the_pick(project, fake_claude):
+    p = project(item("alpha", "testing", flags="trusted"), item("beta", "testing"))
+    assert p.go() == 0
+    assert not fake_claude.calls()
+    assert p.show("alpha")["closed"]
+    assert p.show("beta")["stage"] == "testing"
+
+
 def test_a_low_item_is_left_for_its_own_build(project, fake_claude):
     p = project(item("alpha"))
     p.play(p.scene(move("alpha", "ready", "low", 3), result="COMMIT: alpha: triaged"),
@@ -539,6 +575,46 @@ def test_a_run_has_no_limit_on_its_items(project, fake_claude):
     assert len(fake_claude.calls()) == 21
     assert " Iteration 21..." in p.lines
     assert "[QUEUE_EMPTY] - All actionable agent tasks have been fully cleared." in p.lines
+
+
+def test_show_json_carries_the_text_show_prints(project):
+    # The loop builds a prompt from one call, not two (item trackerstart).
+    # beta waits on alpha, so both print a related list and beta a waiting line.
+    beta = item("beta").replace('- points = 3', '- after = "alpha"\n            - points = 3')
+    p = project(item("alpha", labels="core"), beta)
+    for handle in ("alpha", "beta"):
+        shown = json.loads(p.overseer.tracker(p.tracker, "show", handle, "--json").stdout)
+        assert shown["text"] + "\n" == p.overseer.tracker(p.tracker, "show", handle).stdout.replace("\r\n", "\n")
+
+
+def test_an_item_costs_the_loop_few_tracker_calls(project, fake_claude, monkeypatch):
+    # The tags are read once a run, and a triage going on to its build reads the item once after
+    # the session (item trackerstart).
+    calls = []
+    run = loop._run_tracker
+    monkeypatch.setattr(loop, "_run_tracker", lambda tracker, env, *args: calls.append(args) or run(tracker, env, *args))
+    p = project(item("alpha", labels="core"), item("beta", "ready", complexity="low"), item("gamma", "ready", complexity="low"))
+    p.play(p.scene(move("alpha", "ready", "medium", 3), result="COMMIT: alpha: triaged"),
+           p.scene(move("alpha", "testing"), result="COMMIT: alpha: built"),
+           p.scene(move("beta", "testing"), result="COMMIT: beta: built"),
+           p.scene(move("gamma", "testing"), result="COMMIT: gamma: built"))
+    assert p.go() == 0
+    assert len(fake_claude.calls()) == 4
+    assert [a for a in calls if a[0] == "tag"] == [("tag", "--json")]
+    # alpha: its context, tried, after the triage, after the build - and no read between the two.
+    assert len([a for a in calls if a[:2] == ("show", "alpha")]) <= 4
+
+
+def test_an_item_worked_stays_the_loops_account_and_one_for_another_is_left(project, fake_claude):
+    # The `for` column (item for-col): the loop takes an item for no one and gives it to the
+    # account its key signs in as; one for another account it never takes.
+    theirs = item("theirs", "ready", complexity="low").replace("- points = 3", '- assignee = "zombo"\n            - points = 3')
+    p = project(item("open", "ready", complexity="low"), theirs)
+    p.play(p.scene(move("open", "testing"), result="COMMIT: open: built"))
+    assert p.go() == 0
+    assert len(fake_claude.calls()) == 1
+    assert p.show("open")["assignee"] == AGENT
+    assert p.show("theirs")["stage"] == "ready"
 
 
 def test_items_flagged_asked_do_not_stop_the_queue(project, fake_claude):

@@ -5,14 +5,25 @@
                                                the first of those, or the signal, as JSON - or the
                                                item preferred, if it is free to take; with --owner,
                                                that user's items come before everything flagged first;
-                                               an item mentioning an account (@<name>) in its
-                                               title, or at the end of its last comment not by a
-                                               loop, is only for the loops signed in as that account
-    python tracker.py claim <handle> [--worker <name>]
+                                               an item for an account - its `for` column, else
+                                               one it mentions (@<name>) in its title, or at the
+                                               end of its last comment not by a loop - is only
+                                               for the loops signed in as that account
+    python tracker.py claim <handle> [--worker <name>] [--hold-only]
                                                mark an item as an agent loop's to work - refused
-                                               if another loop has it - as JSON, with the name of
-                                               the agent at it for the page to show
+                                               if another loop has it, or it is for another
+                                               account - as JSON, with the name of the agent at
+                                               it for the page to show; an item for no one
+                                               becomes the loop's account's. --hold-only marks
+                                               it as being worked and nothing more, whoever it
+                                               is for: what a loop transcribing it does
     python tracker.py release <handle>         let go of it again
+    python tracker.py finish [<handle>]        finish an item flagged trusted once it is at
+                                               testing, or every such item - the loop's, after
+                                               its work record
+    python tracker.py bench sit|leave --loop <machine>/<loop>
+                                               take or give up an idle loop's seat on the
+                                               tracker's bench, as the key's account
     python tracker.py show <handle> [--json]   one item in full, open or closed: its fields, the
                                                items around it - parent, after, what it holds up,
                                                parts, siblings - and its conversation
@@ -39,6 +50,30 @@
     python tracker.py attach <picture>         keep a picture on the server, and print the
                                                path a comment shows it by: ![what it shows](path)
     python tracker.py projects                 the other projects beside this one, a line each
+    python tracker.py sounds [--fetch]         the sounds on open items marked for transcription,
+                                               as JSON - with --fetch, each fetched into the
+                                               scratch folder too
+    python tracker.py heard <handle> <at> <path> <text>
+                                               a transcript written under a sound marked for
+                                               transcription in the comment dated <at>, the sound
+                                               then marked transcribed
+    python tracker.py append <list> <json>     a record appended to a list the project's own
+                                               document declares - not one tracker.py governs -
+                                               its address under the root, the record a JSON
+                                               object or @<file>: fields typed by their JSON, a
+                                               list of objects appended under it; prints the new
+                                               entry's address
+    python tracker.py people                   the people the server keeps an account for, as
+                                               JSON: [{"username", "name"}]
+
+A sound in a comment marked for transcription - ![transcribe](sounds/<doc>/<time>.webm), the
+page's box ticked on its player, as it is on a recording made there - holds its item back until
+it is transcribed: queue lists the item as unheard and next names it in `unheard`, whoever it is
+for, since what was said is not known until it is heard. A sound with any other alt text - an
+audio file dropped in, ![](...) - is not an instruction and holds nothing. A transcribed sound is
+![transcribed](...), its transcript quoted on the lines under it; heard writes both, and is the
+one command that changes a comment already made - only to add that, on an item at any stage. A
+loop transcribing an item claims it with --hold-only first, and leaves alone one claimed already.
 
 An item's conversation is a list of comments, each dated and signed: AGENT_AUTHOR signs what this
 adds - the loop sets it to the model and effort of the session - and 'agent' when nothing does.
@@ -60,8 +95,11 @@ working on is marked working: the loop claims it once it has picked it, and rele
 session ends. queue and next leave a claimed item to the loop that holds it; the other commands do
 not refuse one, as the session working it is the one that holds it. On a server, the claim is the
 template's claim button pressed, which refuses an item already claimed: one write, so two loops
-claiming at once cannot both have it. The claim then writes the item's `worker` - --worker, else
-AGENT_AUTHOR - which the page shows on the item while it is worked; release takes both out.
+claiming at once cannot both have it. The press also records the account whose key pressed it in
+`worker_by`, and the claim then writes the item's `worker` - --worker, else AGENT_AUTHOR. The row
+draws that account's chip beside the model while the item is worked; release takes both out.
+An item for no one - its `for` column, `assignee`, empty - is then given that account, which
+release leaves: the item stays that bot's, and only its loops take it again.
 
 A comment names an item as <#handle>, which the page draws as the item's chip; show adds the
 item's title after it - <#handle> (Its title) - so it reads without asking, and leaves code alone.
@@ -93,6 +131,12 @@ or cancelling one, moving one flagged discuss to ready, moving one to ready whil
 still unassigned, moving one to parts that has no open parts, and touching History. Of the flags, an agent sets only two, and only this way: asked, by ask or by
 file --ask, and auto, which file sets by itself when the agent loop runs it (AGENTIC_LOOP is set) -
 an item filed because a person asked for it is not auto.
+
+An item flagged trusted - a person's flag - is one the owner trusts to be done right: once it is at
+testing, the loop finishes it with finish, after the session's work record is written, so that the
+record goes to History with it. finish is the loop's, like claim, release and work: it refuses
+anything but an open item at testing flagged trusted with no open parts, and move still refuses
+finished to everyone.
 """
 import argparse
 import hashlib
@@ -109,13 +153,13 @@ from pathlib import Path
 DEFAULT = os.environ.get('OVERSEER_TRACKER')
 # The versions of the project template this tracker.py reads: its `template_version`, which
 # Overseer raises whenever the stages, complexities, flags or an item's fields change.
-TEMPLATE_VERSIONS = (1,)
+TEMPLATE_VERSIONS = (1, 2)
 # How the server names a document of its libraries (overseer:library-source).
 LIBRARY_PREFIX = 'library:'
 
 # The order a save writes an entry's fields in: the template's. After them come the item's lists,
 # each in the div that folds it away: its conversation, then the agents' work on it.
-ORDER = ['added', 'handle', 'owner', 'title', 'stage', 'parent', 'after', 'labels', 'flags', 'points', 'complexity',
+ORDER = ['added', 'handle', 'owner', 'assignee', 'title', 'stage', 'parent', 'after', 'labels', 'flags', 'points', 'complexity',
          'pinned', 'working', 'touched_at']
 TALK = ('Talk', 'Comments', ['at', 'author', 'status', 'body'])
 WORK = ('Agents', 'Work', ['at', 'kind', 'model', 'moved', 'points', 'cost', 'read', 'written', 'output',
@@ -131,6 +175,8 @@ CLOSING = {'finished', 'cancelled'}
 PRIORITY = ['ready', 'planning', 'filed']
 # The flags that hold an item for a person: no agent takes it, or touches it, while it has one.
 HELD = ['manual', 'asked']
+# The flag of an item the loop finishes once it reaches testing (item trusted-item).
+TRUSTED = 'trusted'
 # The template's complexity: an item with no complexity line has not been judged yet.
 UNASSIGNED = 'unassigned'
 # What the template's claim button says when another loop has the item.
@@ -888,9 +934,14 @@ def last_said(t, top, bottom):
 
 
 def bots(item, said, people):
-    """The accounts an item is for (item assign-bot): those its title mentions, anywhere, and
-    those the last comment not by a loop ends by mentioning - `said`'s body. Empty when it is for
-    any loop. A later comment of a person's, mentioning no one at its end, hands it back to all."""
+    """The accounts an item is for: its `for` column, `assignee`, when that names one, and nothing
+    else (item for-col). Otherwise, by mentions (item assign-bot): those its title mentions,
+    anywhere, and those the last comment not by a loop ends by mentioning - `said`'s body. Empty
+    when it is for any loop. A later comment of a person's, mentioning no one at its end, hands it
+    back to all - an item with no assignee, that is: the column is set on purpose, and only the
+    column takes it back."""
+    if item.get('assignee'):
+        return [item['assignee']]
     named = [tag for *_, tags in mentions(item.get('title', ''), people) for tag in tags]
     named += trailing(said or '', people)
     return list(dict.fromkeys(named))
@@ -924,19 +975,23 @@ class Queue:
     then come before everything flagged first - owned and first, owned, others' first, the rest.
     The script has no manager, so without `owner` the order is exactly the script's.
 
-    An item that mentions accounts - in its title, or at the end of its last comment not by a
-    loop (`bots`) - is free only to a loop whose key signs in as one of them; to any other it is
+    An item for accounts - its `for` column, else those it mentions in its title, or at the end of
+    its last comment not by a loop (`bots`) - is free only to a loop whose key signs in as one of them; to any other it is
     held for those accounts, in `others` as (stage, item, usernames), and is neither free nor taken
     by `--prefer`. The server's directory, and who the loop is - `me` - are asked of it only when
-    some item holds an @ where a mention would count; `names` gives each username's plain display
-    name, for saying who an item is held for."""
+    some item has an assignee, or holds an @ where a mention would count; `names` gives each username's plain display
+    name, for saying who an item is held for.
+
+    An item with a sound in its conversation marked for transcription (REQUESTED) is none of these
+    either, whoever it is for: it is `unheard`, held until a loop has written the transcript under
+    the sound."""
 
     def __init__(self, t, owner=None):
         self.owner = owner
         entries = t.items()
         items = [f for _, _, f in entries]
         said = {id(f): (last_said(t, top, bottom) or {}).get('body', '') for top, bottom, f in entries}
-        maybe = any('@' in f.get('title', '') or '@' in said[id(f)] for f in items)
+        maybe = any(f.get('assignee') or '@' in f.get('title', '') or '@' in said[id(f)] for f in items)
         people = t.server.people(t) if maybe else []
         named_by = {id(f): bots(f, said[id(f)], people) for f in items}
         self.names = {tag: plain(name) or tag for tag, name in people}
@@ -951,13 +1006,20 @@ class Queue:
             points = str(f.get('points', '1'))
             return -holds.get(f.get('handle'), 0), int(points) if points.isdigit() else 1
 
-        self.free, self.waiting, self.held, self.claimed, self.others = [], [], [], [], []
+        # An item with a sound not yet transcribed waits for it, whoever it is for: what was said
+        # is not known until it is heard. Its comments are read only where the text plays a sound.
+        noisy = any(SOUND_HERE.search(line) for line in t.lines)
+        deaf = {id(f) for top, bottom, f in entries
+                if noisy and any(unheard_sounds(c.get('body', '')) for c in t.nested(top, bottom, TALK))}
+        self.free, self.waiting, self.held, self.claimed, self.others, self.unheard = [], [], [], [], [], []
         for stage in PRIORITY:
             for f in sorted(self.by_stage.get(stage, []), key=order):
                 if claimed(f):
                     self.claimed.append((stage, f))
                 elif held(f):
                     self.held.append((stage, f))
+                elif id(f) in deaf:
+                    self.unheard.append((stage, f))
                 elif waits := waiting_on(t, f, items):
                     self.waiting.append((stage, f, waits))
                 elif (named := named_by[id(f)]) and self.me not in named:
@@ -991,6 +1053,8 @@ def queue(t, args):
         print(f'  claimed  {stage:8} {f["handle"]:16} an agent loop is working on it')
     for stage, f, named in q.others:
         print(f'  for      {stage:8} {f["handle"]:16} held for {", ".join(q.names.get(n, n) for n in named)}')
+    for stage, f in q.unheard:
+        print(f'  unheard  {stage:8} {f["handle"]:16} waiting for its sounds to be transcribed')
     if q.me:
         print(f'this loop signs in as {q.names.get(q.me, q.me)} ({q.me}): items mentioning it, '
               'or no one, are its to take')
@@ -1023,7 +1087,10 @@ def next_item(t, args):
     # whose bot no loop runs: on the signal too, since a loop with nothing left is one to warn.
     bot = ({'me': q.me} if q.me else {}) | (
         {'others': [{'handle': f['handle'], 'bots': named, 'names': [q.names.get(n, n) for n in named]}
-                    for _, f, named in q.others]} if q.others else {})
+                    for _, f, named in q.others]} if q.others else {}) | (
+        # And what waits for its sounds to be transcribed, for the loop to transcribe before it
+        # takes an item - on the signal too, since those may be all there is.
+        {'unheard': [f['handle'] for _, f in q.unheard]} if q.unheard else {})
     if q.signal:
         print(json.dumps({'signal': q.signal} | bot))
         return
@@ -1128,6 +1195,41 @@ def with_titles(t, text):
 IMAGE = re.compile(r'!\[([^\]]*)\]\(([^)\s]+)\)')
 
 
+#: The sounds the page plays in a comment: Overseer's AUDIO_EXTENSION, and what else its audioBeside
+#: asks of a path - relative, with no `\ : ? #` and no empty, `.` or `..` part (src/renderer.js).
+SOUND = ('mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'webm', 'wav', 'flac')
+SOUND_FILE = re.compile(r'\.(' + '|'.join(SOUND) + r')$', re.I)
+#: A line of the tracker's text that may play one: what the queue looks for before it reads comments.
+SOUND_HERE = re.compile(r'\.(' + '|'.join(SOUND) + r')\)', re.I)
+
+#: The alt text that marks a sound as transcribed, the transcript quoted on the lines under it. The
+#: page shows the alt only as the player's tooltip (audioPlayerHtml), so it is free to say this.
+TRANSCRIBED = 'transcribed'
+#: The alt text that asks for a sound to be transcribed: the box on the page's player, ticked
+#: (item voice-request). A sound with any other alt text is not an instruction and holds nothing.
+REQUESTED = 'transcribe'
+
+#: Code - fenced, or in backticks - or an image or sound reference: what sounds_in walks a body by.
+CODE_OR_MEDIA = re.compile(r'(```.*?```|`[^`\n]*`)|' + IMAGE.pattern, re.S)
+
+
+def is_sound(path):
+    return (bool(SOUND_FILE.search(path)) and not re.search(r'^/|[\\:?#]', path)
+            and all(p not in ('', '.', '..') for p in path.split('/')))
+
+
+def sounds_in(body):
+    """Every sound a comment's text plays, as its match - alt text group 2, path group 3 - in order.
+    Inside code a reference is text, as the page leaves it."""
+    return [m for m in CODE_OR_MEDIA.finditer(body) if not m.group(1) and is_sound(m.group(3))]
+
+
+def unheard_sounds(body):
+    """The paths of the sounds in a comment's text waiting to be transcribed - those whose alt text
+    is REQUESTED. A sound with no request, or already transcribed, is not one."""
+    return [m.group(3) for m in sounds_in(body) if m.group(2).strip() == REQUESTED]
+
+
 def fetched_image(t, target):
     """An image the tracker names, fetched into the scratch folder - or the temporary one -
     under the path the comment gives it, so it can be opened here; None if the server has none."""
@@ -1143,6 +1245,149 @@ def fetched_image(t, target):
         here.parent.mkdir(parents=True, exist_ok=True)
         here.write_bytes(data)
     return here.resolve()
+
+
+def fetched_sound(t, target):
+    """A sound the tracker names, fetched as fetched_image fetches an image - through the bridge's
+    load_overseer_audio, into the scratch folder's tracker-sounds - or None if the server has none."""
+    import base64
+    folder = Path(os.environ.get('AGENT_SCRATCH') or tempfile.gettempdir()) / 'tracker-sounds' / t.project
+    here = folder / Path(target.replace('\\', '/')).name
+    if not here.is_file():
+        try:
+            got = t.server.bridge(t.name, 'load_overseer_audio', {'path': t.name, 'audio': target})['result']
+            data = base64.b64decode(got['data'])
+        except (SystemExit, KeyError, TypeError, ValueError):
+            return None
+        here.parent.mkdir(parents=True, exist_ok=True)
+        here.write_bytes(data)
+    return here.resolve()
+
+
+def unheard(t):
+    """Every sound on an open item not yet transcribed, as a dict each: the item's handle and title,
+    the comment's `at` and author, and the sound's path - in a comment by anyone, a loop's too."""
+    found = []
+    for top, bottom, f in t.items():
+        for c in t.nested(top, bottom, TALK):
+            for path in unheard_sounds(c.get('body', '')):
+                found.append({'handle': f.get('handle'), 'at': c.get('at', ''), 'author': c.get('author', ''),
+                              'path': path, 'title': f.get('title', '')})
+    return found
+
+
+def sounds(t, args):
+    """For a loop: the sounds to transcribe, as one line of JSON - with --fetch, each fetched into
+    the scratch folder, its local path as `file`, or None where the server has no such file."""
+    found = unheard(t)
+    if args.fetch:
+        for s in found:
+            here = fetched_sound(t, s['path'])
+            s['file'] = here.as_posix() if here else None
+    print(json.dumps(found))
+
+
+def instant(written):
+    """A timestamp as a moment, however it is written - `+00:00` or `Z`, with or without a fraction -
+    for the server writes it back in its own form; None if it is no timestamp."""
+    try:
+        return datetime.fromisoformat(str(written).strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def node_value(node):
+    """A node's value as /v1/node answers it, whatever its type: `{"Timestamp": "..."}` gives the text."""
+    value = (node.get('parameters') or {}).get('value') or {}
+    return next(iter(value.values()), None) if isinstance(value, dict) else None
+
+
+def the_comment(t, address, at):
+    """(address, body) of the comment in the list at `address` whose `at` is that moment, read from
+    the server now - its address as the server names it, for a list with no key is addressed by
+    position - or None if there is none."""
+    answer = t.server.call('GET', '/v1/node', {'document': t.name, 'address': address}, refusable=True)
+    children = (answer or {}).get('node', {}).get('children', [])
+    for node, where in zip(children, (answer or {}).get('child_addresses', [])):
+        if instant(named_value(node, 'at')) == at:
+            return where, named_value(node, 'body') or ''
+    return None
+
+
+def named_value(node, name):
+    """The value of the first field called `name` in a node's subtree: the template draws a
+    comment's `at` and `author` in a row of their own, a div inside it."""
+    for child in node.get('children', []):
+        if child.get('name') == name:
+            return node_value(child)
+        found = named_value(child, name)
+        if found is not None:
+            return found
+    return None
+
+
+def unmentioning(text):
+    """A transcript that mentions nobody: each @ outside code, and the name after it, put in
+    backticks - so it is never a trailing mention, which decides who an item is for (`trailing`)."""
+    parts = re.split(r'(```.*?```|`[^`\n]*`)', text, flags=re.S)
+    return ''.join(p if i % 2 else re.sub(r'@[^\s`]*', lambda m: f'`{m.group(0)}`', p) for i, p in enumerate(parts))
+
+
+def with_transcript(body, sound, transcript):
+    """A comment's text with the sound - a match of sounds_in - marked TRANSCRIBED and the
+    transcript quoted on the lines under the line it is on. Nothing else changes, but for a blank
+    line after the quote where text follows it at once, which markdown would read into the quote."""
+    marked = body[:sound.start()] + f'![{TRANSCRIBED}]({sound.group(3)})' + body[sound.end():]
+    end = sound.end() + len(marked) - len(body)
+    eol = marked.find('\n', end)
+    eol = len(marked) if eol < 0 else eol
+    quote = '\n'.join('> ' + line if line.strip() else '>' for line in transcript.split('\n'))
+    rest = marked[eol:]
+    gap = '\n' if rest.startswith('\n') and not rest.startswith('\n\n') and rest.strip() else ''
+    return marked[:eol] + '\n' + quote + gap + rest
+
+
+def people(t, args):
+    """For a loop: everyone a comment may name, as one line of JSON - what the call that cleans up
+    a voice message's transcript is told, so that it writes the names it hears as they are."""
+    print(json.dumps([{'username': tag, 'name': plain(name)} for tag, name in t.server.people(t)], ensure_ascii=False))
+
+
+def heard(t, args):
+    """A transcript written under a sound in a comment - the one edit of an existing comment there
+    is, and all it may do. Allowed on an item at any stage and with any flag: transcribing is not
+    working the item. The comment is read again just before the write, so a sound the owner has
+    since removed, or another loop has transcribed, is refused rather than written over; and read
+    once more after it, as the list's entries are addressed by position."""
+    transcript = unmentioning(text_of(args.text))
+    if not transcript:
+        sys.exit('a transcript with nothing in it')
+    at = instant(args.at)
+    if at is None:
+        sys.exit(f'{args.at} is no timestamp: give the comment\'s `at`, as tracker.py sounds lists it')
+    top, _, _ = t.item(args.handle)
+    comments = f'{t.address_at(top)}/{TALK[0]}/{TALK[1]}'
+    try:
+        found = the_comment(t, comments, at)
+    except Refused:
+        found = None
+    if not found:
+        sys.exit(f'{args.handle} has no comment at {args.at} - it may have been removed')
+    where, body = found
+    playing = [m for m in sounds_in(body) if m.group(3) == args.path]
+    if not playing:
+        sys.exit(f'the comment at {args.at} on {args.handle} no longer holds {args.path}')
+    waiting = [m for m in playing if m.group(2).strip() == REQUESTED]
+    if not waiting:
+        done = all(m.group(2).strip() == TRANSCRIBED for m in playing)
+        sys.exit(f'{args.path} on {args.handle} is transcribed already' if done
+                 else f'{args.path} on {args.handle} is not marked for transcription')
+    t.server.set(t.name, f'{where}/body', {'String': with_transcript(body, waiting[0], transcript)})
+    again = the_comment(t, comments, at)
+    if not again or again[0] != where:
+        sys.exit(f'the comments on {args.handle} moved while the transcript was written: the one at {where} '
+                 'may not be the one meant - look at it')
+    print(f'{args.handle}: transcript written under {args.path}, {len(transcript)} characters')
 
 
 def find(t, handle):
@@ -1164,33 +1409,43 @@ def show(t, args):
     where, top, bottom, f, closed = find(t, handle)
     said = where.nested(top, bottom, TALK)
     rows, more = related(t, f, handle)
+    lines = show_lines(t, args, f, closed, said, rows, more)
     if args.json:
+        # The text as well, as `show` prints it: the loop puts it in a prompt, and reads the
+        # fields too, in one call rather than two (trackerstart).
         print(json.dumps(dict(f, closed=closed, waiting=[] if closed else waiting_on(t, f),
                               related=[dict(zip(('relation', 'handle', 'stage', 'title'), r)) for r in rows],
-                              comments=said, work=where.nested(top, bottom, WORK))))
+                              comments=said, work=where.nested(top, bottom, WORK), text='\n'.join(lines))))
         return
+    print('\n'.join(lines))
+
+
+def show_lines(t, args, f, closed, said, rows, more):
+    """The item as `show` prints it, line by line."""
+    out = []
     for name in (['finished_at', 'status'] if closed else []) + ORDER:
         if name in f and f[name] != '':
-            print(f'{name:10} {f[name]}')
+            out.append(f'{name:10} {f[name]}')
     if t.project != Path(args.doc).stem:
-        print(f'project    {t.project} - another project\'s item: read it here, change nothing in it')
+        out.append(f'project    {t.project} - another project\'s item: read it here, change nothing in it')
     if closed:
-        print('closed     - it can be read, and only a person changes it')
+        out.append('closed     - it can be read, and only a person changes it')
     else:
         held_by = waiting_on(t, f)
         parts = [h for h in held_by if h not in split(f.get('after'))]
         named = [', '.join(h for h in held_by if h not in parts)] + ([f'its parts {", ".join(parts)}'] if parts else [])
-        print(f'waiting    {"on " + "; ".join(x for x in named if x) if held_by else "no"}')
+        out.append(f'waiting    {"on " + "; ".join(x for x in named if x) if held_by else "no"}')
     if rows:
         width = max(len(r[1]) for r in rows)
-        print('\nrelated - tracker.py show <handle> for any of them:')
+        out.append('\nrelated - tracker.py show <handle> for any of them:')
         for rel, h, stage, title in rows:
-            print(f'  {rel:9} {h:{width}}  {stage:10} {title}')
+            out.append(f'  {rel:9} {h:{width}}  {stage:10} {title}')
         for line in more:
-            print(f'  {line}')
-    print(f'\nconversation, oldest first: {len(said) or "nothing said yet"}')
+            out.append(f'  {line}')
+    out.append(f'\nconversation, oldest first: {len(said) or "nothing said yet"}')
     for c in said:
-        print(f'\n--- {c.get("at", "")[:16].replace("T", " ")}  {c.get("author", "")}\n{with_titles(t, c.get("body", ""))}')
+        out.append(f'\n--- {c.get("at", "")[:16].replace("T", " ")}  {c.get("author", "")}\n{with_titles(t, c.get("body", ""))}')
+    return out
 
 
 def about(t, args):
@@ -1472,10 +1727,23 @@ def claim(t, args):
     """For a loop: the item it is about to work marked as its own, as one line of JSON - claimed, or
     refused with the template's words when another loop has it already. On a server it is the
     template's claim button pressed, which refuses an item already claimed in the same write that
-    claims it."""
+    claims it, and records the account whose key pressed it in `worker_by`; the model goes to `worker`.
+
+    An item for another account - its `for` column, `assignee` - is refused before the press: it
+    may have been given to one between `next` and the claim. One for no one is given the account
+    the key signs in as once it is claimed, so that it stays that bot's (item for-col).
+
+    With --hold-only the press is all there is, whoever the item is for: a loop transcribing an
+    item's voice messages holds it against other loops while it does, but that does not make the
+    item its account's (item voice-tweaks)."""
     top, _, f = t.item(args.handle)
     if claimed(f):
         print(json.dumps({'handle': args.handle, 'claimed': False, 'refused': TAKEN}))
+        return
+    hold_only = getattr(args, 'hold_only', False)
+    me = None if hold_only else t.server.me()
+    if not hold_only and f.get('assignee') and f['assignee'] != me:
+        print(json.dumps({'handle': args.handle, 'claimed': False, 'refused': f'it is for {f["assignee"]}'}))
         return
     try:
         t.server.event(t.name, f'{t.address_at(top)}/claim', 'click')
@@ -1494,6 +1762,13 @@ def claim(t, args):
             t.set_field(args.handle, 'worker', worker)
         except SystemExit as e:
             print(f'{args.handle}: claimed, but its worker could not be written: {e}', file=sys.stderr)
+    if not hold_only and not f.get('assignee'):
+        # Claimed already, by the press: a template without the column yet refuses the write, and
+        # the claim stands all the same.
+        try:
+            t.set_field(args.handle, 'assignee', quoted(me))
+        except SystemExit as e:
+            print(f'{args.handle}: claimed, but it could not be given to {me}: {e}', file=sys.stderr)
     print(json.dumps({'handle': args.handle, 'claimed': True}))
 
 
@@ -1508,6 +1783,12 @@ def release(t, args):
     t.set_field(args.handle, 'working', None)
     # The template's own "" back, so the row shows no name once nobody works it.
     t.set_field(args.handle, 'worker', None)
+    # The account the claim button recorded, which the row draws as a chip beside the model. A
+    # template without the field yet refuses the write, and a release must not fail for that.
+    try:
+        t.set_field(args.handle, 'worker_by', None)
+    except SystemExit as e:
+        print(f'{args.handle}: released, but its worker_by could not be cleared: {e}', file=sys.stderr)
     print(f'{args.handle}: released')
 
 
@@ -1530,6 +1811,56 @@ def work(t, args):
     print(f'{args.handle}: recorded a {args.kind} session on {args.model}')
 
 
+def finishable(t, f):
+    """Why an open item may not be finished by the loop, or None when it may: flagged trusted, at
+    testing, with no open parts."""
+    if not flagged(f, TRUSTED):
+        return f'{f["handle"]} is not flagged {TRUSTED} - only a person finishes it'
+    if f['stage'] != 'testing':
+        return f'{f["handle"]} is at {f["stage"]}, not testing - a trusted item is finished once it reaches testing'
+    if parts := open_parts(t, f['handle']):
+        return f'{f["handle"]} has open parts ({", ".join(parts)}) - it is finished after them'
+    return None
+
+
+def finish_one(t, handle):
+    """The stage set to finished, then its `change` run: the server's plain write runs no handler,
+    and the stage's is what moves the item to History - as a person picking it on the page does."""
+    top, _, _ = t.item(handle)
+    stage = f'{t.address_at(top)}/stage'
+    t.set_field(handle, 'stage', quoted('finished'))
+    try:
+        t.server.event(t.name, stage, 'change')
+    except Refused as refused:
+        # Put back, rather than left at a finished stage still on the open list.
+        t.set_field(handle, 'stage', quoted('testing'))
+        sys.exit(f'the server would not finish {handle}: {refused}'.rstrip())
+    print(f'{handle}: testing -> finished')
+
+
+def finish(t, args):
+    """For the loop: an item flagged trusted, at testing, finished - its stage set to finished, and
+    the template's own `on change` moves it to History, with its conversation and work records, and
+    moves a parent at parts on to testing once it was the last. Only such an item: move refuses
+    finished to an agent, and this is no way around it (item trusted-item).
+
+    With no handle, every such item, one line each: finishing a part can bring a trusted parent to
+    testing, so the tracker is read again after each, as an item's address moves once one before it
+    has gone to History."""
+    if args.handle:
+        _, _, f = t.item(args.handle)
+        if why := finishable(t, f):
+            sys.exit(why)
+        finish_one(t, args.handle)
+        return
+    done = set()
+    while handle := next((f['handle'] for _, _, f in t.items()
+                          if f['handle'] not in done and finishable(t, f) is None), None):
+        finish_one(t, handle)
+        done.add(handle)
+        t.reload()
+
+
 def attach(t, args):
     """A picture kept with the tracker, for a comment to show: prints the path to write in it as
     `![what it shows](path)`. It is sent to the server, which names it."""
@@ -1542,6 +1873,138 @@ def attach(t, args):
         'path': t.name, 'mime': kinds[picture.suffix.lower()],
         'data': base64.b64encode(picture.read_bytes()).decode('ascii')})['result']
     print(where)
+
+
+def seat_key(seat):
+    """A seat as the key step of an address, `[...]`: a `/` in it escaped, as the server splits an
+    address at its last unescaped `/` (overseer:benchdiv), and so a `\\` too."""
+    return '[' + seat.replace('\\', '\\\\').replace('/', '\\/') + ']'
+
+
+def bench(t, args):
+    """For a loop: its seat on the tracker's bench - `project/Bench`, the loops on Auto that wait
+    for work, which the page shows beside the filter bar as their accounts' chips (item projbench).
+    A seat is one loop's, `<account>@<machine>/<loop>`: `--loop` gives `<machine>/<loop>`, and the
+    account is the one the key signs in as, which the loop does not always know.
+    `sit` takes the seat from now; a seat already taken - by
+    a run of the same loop that was killed - is left and taken again, as the list's entries cannot
+    be edited. `leave` gives it up, and is quiet when there is nothing to give up. A tracker whose
+    template has no bench yet is said on stderr and is no failure, so a loop never stops over it."""
+    start = t.header('Bench')
+    if start is None and not t.declares('Bench'):
+        print(f"{t.path.name} has no bench: the server's project template is older than the bench", file=sys.stderr)
+        return
+    address = f'{t.root() if start is None else t.root_of(start)}/Bench'
+    me = t.server.me()
+    seat = f'{me}@{args.loop}'
+    seated = any(f.get('seat') == seat for _, _, f in t.entries('Bench'))
+    if seated:
+        # The seat it must still be, so that nothing else is taken out under its key.
+        t.server.call('POST', '/v1/remove', {'document': t.name, 'address': f'{address}/{seat_key(seat)}'},
+                      {'fields': {'seat': {'String': seat}}})
+    if args.action == 'leave':
+        print(f'{seat}: left the bench' if seated else f'{seat}: not on the bench')
+        return
+    t.server.append(t.name, address, {'seat': {'String': seat}, 'account': {'String': me},
+                                      'since': {'Timestamp': now()}})
+    print(f'{seat}: on the bench')
+
+
+# The lists tracker.py governs, and the template's others: what the stage rules and the loop keep,
+# never appended to by `append`, wherever in an address they are named.
+GOVERNED = ('Items', 'History', 'Features', 'Discussion', 'Labels', 'Milestones', 'Bench', 'People', 'people',
+            'Stages', 'Complexities', 'Statuses', 'Flags', 'Standings', 'Comments', 'Work')
+
+
+def own_list(t, address):
+    """The address of a list the project's own document declares, from what `append` was given:
+    under the root, with or without the root and a leading `/`. Refused - the command stops saying
+    why - where it names a list tracker.py governs, or its first step is not something this
+    document's own text declares, or is one the template it inherits has: those are the stage
+    rules' and the loop's to write."""
+    steps = [s for s in address.strip().strip('/').split('/') if s]
+    root = t.root()
+    if steps and steps[0] == root:
+        steps = steps[1:]
+    if not steps:
+        sys.exit(f'append: no list named in {address!r} - give its address under {root}/, as '
+                 f'Benchmarks/bench/bench/Benchmarks')
+    governed = next((s for s in steps if s in GOVERNED or s.split('[')[0] in GOVERNED), None)
+    if governed:
+        sys.exit(f'append: {governed} is a list tracker.py governs - items, their conversations and the '
+                 f"template's lists are written by its other commands, under the stage rules")
+    first = steps[0]
+    # A named element of the document's own - `tab Benchmarks (...) {` - not an entry or a field
+    # of the template's that the document fills in (`- name = ...`, `- Items {`).
+    declared = re.compile(rf'\s*(?:<[^>]*>|[a-z][\w-]*)\s+{re.escape(first)}\s*[({{=]')
+    if not any(declared.match(line) for line in t.lines if not line.strip().startswith(('-', '//'))):
+        sys.exit(f"append: {first} is not something {t.path.name} declares of its own - only a list in a part "
+                 f'the project added to its tracker can be appended to')
+    if t.base():
+        template = t.base_tracker()
+        if any(declared.match(line) for line in template.lines):
+            sys.exit(f"append: {first} is the project template's, not {t.path.name}'s own")
+    return '/'.join([root, *steps])
+
+
+def json_fields(record, where='the record'):
+    """An entry's fields as the server takes them, typed by their JSON - text String, a whole
+    number Integer, any other number Float, true and false Boolean - and not by TYPES, which names
+    the tracker's own fields: a project's `score` is no tracker field. An object of one server type,
+    `{"Timestamp": "..."}`, is given as it is. A list of objects is a list inside the entry, kept
+    apart to append once the entry is there; a null is left to the template."""
+    if not isinstance(record, dict):
+        sys.exit(f'append: {where} is to be a JSON object of fields')
+    fields, nested = {}, {}
+    for name, value in record.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            fields[name] = {'Boolean': value}
+        elif isinstance(value, int):
+            fields[name] = {'Integer': value}
+        elif isinstance(value, float):
+            fields[name] = {'Float': value}
+        elif isinstance(value, str):
+            fields[name] = {'String': value}
+        elif (isinstance(value, dict) and len(value) == 1 and next(iter(value))[:1].isupper()
+              and not isinstance(next(iter(value.values())), (dict, list))):
+            fields[name] = value
+        elif isinstance(value, list) and all(isinstance(v, dict) for v in value):
+            nested[name] = value
+        else:
+            sys.exit(f'append: {name} in {where} is neither a value, an object of one type as '
+                     '{"Timestamp": "..."}, nor a list of entries')
+    return fields, nested
+
+
+def append_record(t, address, record, where='the record'):
+    """One entry appended to the list at `address`, then each entry of its own lists under it, as
+    deep as they go; the new entry's address. The list's addresses are read before and after, as
+    the server orders a list by its key or its sort and so does not put the new one last."""
+    fields, nested = json_fields(record, where)
+    before = set(t.server.call('GET', '/v1/node', {'document': t.name, 'address': address})
+                 .get('child_addresses', []))
+    after = t.server.append(t.name, address, fields).get('child_addresses', [])
+    made = [a for a in after if a not in before]
+    if len(made) != 1:
+        sys.exit(f'append: the server did not say which entry it added to {address}')
+    for name, entries in nested.items():
+        for k, entry in enumerate(entries):
+            append_record(t, f'{made[0]}/{name}', entry, f'{name}[{k}] of {where}')
+    return made[0]
+
+
+def append(t, args):
+    """A record appended to a list the project's own document declares - a project's script
+    keeping its results in its tracker, as Brocessor's benchmarks are - from JSON given inline or as
+    @<file>: one object, its lists of objects appended under it."""
+    address = own_list(t, args.list)
+    try:
+        record = json.loads(text_of(args.record))
+    except ValueError as e:
+        sys.exit(f'append: the record is not JSON: {e}')
+    print(append_record(t, address, record))
 
 
 def check(t, args):
@@ -1566,7 +2029,9 @@ def main():
     p = command('queue'); p.add_argument('--owner')
     p = command('next'); p.add_argument('--prefer'); p.add_argument('--owner')
     p = command('claim'); p.add_argument('handle'); p.add_argument('--worker')
+    p.add_argument('--hold-only', action='store_true')
     p = command('release'); p.add_argument('handle')
+    p = command('finish'); p.add_argument('handle', nargs='?')
     p = command('show'); p.add_argument('handle'); p.add_argument('--json', action='store_true')
     command('about')
     p = command('tag'); p.add_argument('tag', nargs='?'); p.add_argument('--json', action='store_true')
@@ -1586,11 +2051,18 @@ def main():
     p.add_argument('--minutes', type=float, default=0.0)
     command('check')
     p = command('attach'); p.add_argument('file')
+    p = command('sounds'); p.add_argument('--fetch', action='store_true')
+    p = command('heard'); p.add_argument('handle'); p.add_argument('at'); p.add_argument('path')
+    p.add_argument('text')
+    command('people')
     command('projects')
+    p = command('append'); p.add_argument('list'); p.add_argument('record')
+    p = command('bench'); p.add_argument('action', choices=('sit', 'leave')); p.add_argument('--loop', required=True)
     args = parser.parse_args()
-    run = {'queue': queue, 'next': next_item, 'claim': claim, 'release': release, 'show': show, 'about': about, 'tag': tag, 'move': move,
+    run = {'queue': queue, 'next': next_item, 'claim': claim, 'release': release, 'finish': finish, 'show': show, 'about': about, 'tag': tag, 'move': move,
            'note': note, 'ask': ask, 'after': after, 'file': file, 'work': work,
-           'check': check, 'attach': attach,
+           'check': check, 'attach': attach, 'sounds': sounds, 'heard': heard, 'people': people, 'bench': bench,
+           'append': append,
            'projects': lambda t, a: print('\n'.join(t.neighbours()))}[args.command]
     run(open_tracker(args.doc), args)
 
