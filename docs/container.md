@@ -75,15 +75,18 @@ The template is not in Community Applications; adding it by its address is all i
 - **An SSH key** for git goes in `/data/home/.ssh`, mode 600, owned by `PUID`. A GitHub address
   is cloned, fetched and pushed in the form, HTTPS or SSH, the container signs in with: an SSH key,
   `GIT_TOKEN`, or both ([settings.md](settings.md), "HTTPS or SSH").
-- **System packages:** the image has git, Node, `claude`, a compiler and linker
-  (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, `unzip`, and the libraries headless Chrome
-  needs.
+- **System packages:** the image has git, `claude` (its native binary, which needs no Node), a
+  compiler and linker (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, `unzip`, and
+  the libraries headless Chrome needs. It has no Node or npm: a project that needs them lists
+  `brew "node"` in its Brewfile.
 - **A project's tools** come from the `Brewfile` in its first repository, installed as the user
   into the Homebrew volume before each session; a session adds to it itself (see
   [settings.md](settings.md), "Its Brewfile"). The first start fills an empty volume from the
-  image's copy of Homebrew. Brew's `bin` comes first on PATH, so a brewed `node` or `python3` wins
-  for sessions; `claude` itself always runs on the image's Node. Without that volume mounted, the log
-  says so at each start, and what brew installed is lost when the container is recreated.
+  image's copy of Homebrew, a shallow clone that brew's first update fills out in the volume. The
+  Brewfile is installed before the project's setup script runs, so the script can use its tools.
+  Brew's `bin` comes first on PATH, so a brewed `node` or `python3` wins for sessions. Without that
+  volume mounted, the log says so at each start, and what brew installed is lost when the container
+  is recreated.
 - **Started with `--user`**, the image skips all of the above and runs serve as that user.
 
 ## Signing in to Claude
@@ -120,4 +123,6 @@ each loop that was cut off, as `agentloop serve` does on every system (see "When
 [settings.md](settings.md)); the image still passes `--restart-loops`, which asks for what is now
 the default. A loop you had stopped stays stopped. Each one lets go of the item its last run claimed, and picks from the queue again.
 Settings, logins and each project's tools are in `/data` and the Homebrew volume, so they are
-still there.
+still there. Images up to 0.1.9 carried Node and npm and later ones do not (item `docker-image-size`), so
+a project whose sessions or setup script used the image's `node` adds `brew "node"` to its
+Brewfile, and the loop installs it before the next session.

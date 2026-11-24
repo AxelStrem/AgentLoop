@@ -1630,11 +1630,13 @@ class Run:
             # waited on from the first while one is still to be accepted (item doc-change).
             ended = self._definition(read=self.iteration > 0)
             if ended is None:
+                # The Brewfile's tools first, so that a setup script may use them: in the container
+                # node, say, comes only from a Brewfile (item docker-image-size).
+                ended = self._brew()
+            if ended is None:
                 # The project's tools, set up before its first session and whenever the accepted
                 # definition's setup script changes (item project-setup).
                 ended = self._setup()
-            if ended is None:
-                ended = self._brew()
             if ended is None:
                 ended = self._pause()
             if ended is None:
@@ -1995,7 +1997,8 @@ class Run:
         elif not setup.due(self.project, tool):
             self.say(f" {self.project} is set up already, by this {tool['file']}.", "Green")
             return 0
-        return self._setup() or 0
+        # As before a session: the Brewfile's tools are there before the script that may use them.
+        return self._brew() or self._setup() or 0
 
     def _brew(self) -> int | None:
         """Before a session, where Homebrew is on (item brew-tools): what the first repository's

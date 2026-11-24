@@ -8,9 +8,18 @@
 #
 # docs/container.md, says what to give it.
 
-# Node comes from its own image, of the same Debian release as Python's, rather than from a script
-# piped to a shell.
-FROM node:22-bookworm-slim AS node
+# claude is installed with npm in a stage of its own, and only its native binary is carried over:
+# since Claude Code 2.x the package's `claude` is a single executable that needs no node, so the
+# image has neither node nor npm (item docker-image-size). A project that needs node lists it in its
+# Brewfile. Node comes from its own image rather than from a script piped to a shell.
+FROM node:22-bookworm-slim AS claude
+RUN npm install -g @anthropic-ai/claude-code \
+ && target="$(readlink -f /usr/local/bin/claude)" \
+ && if [ "$(head -c 4 "$target" | tail -c 3)" != "ELF" ]; then \
+      echo "claude is not a native binary here, and the image has no node to run it" >&2; exit 1; \
+    fi \
+ && mkdir -p /opt/claude \
+ && cp "$target" /opt/claude/claude
 
 FROM python:3.12-slim-bookworm
 
@@ -29,26 +38,15 @@ RUN apt-get update \
 
 # Homebrew, the one way a project's tools are installed here (item brew-tools). It lives in a volume
 # at its default prefix, where its bottles work; the entrypoint fills an empty one from this copy.
-# procps and file above are what Homebrew needs on Linux beyond the compiler, git and curl.
-RUN git clone --quiet https://github.com/Homebrew/brew /opt/homebrew-seed/Homebrew \
+# procps and file above are what Homebrew needs on Linux beyond the compiler, git and curl. The clone
+# is shallow, a few MB rather than 140: brew runs from one, and its first `brew update` fetches what
+# it needs into the volume, not the image.
+RUN git clone --depth 1 --quiet https://github.com/Homebrew/brew /opt/homebrew-seed/Homebrew \
  && mkdir -p /opt/homebrew-seed/bin /home/linuxbrew/.linuxbrew \
  && ln -s ../Homebrew/bin/brew /opt/homebrew-seed/bin/brew
 
-COPY --from=node /usr/local/bin/node /usr/local/bin/node
-COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
- && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
- && npm install -g @anthropic-ai/claude-code \
- && npm cache clean --force
-
-# Brew's bin comes first on PATH, so a project's Brewfile may install a node of its own: claude,
-# when it is a node script, is pinned to this image's node instead of whichever is first.
-RUN target="$(readlink -f /usr/local/bin/claude)" \
- && if head -n 1 "$target" | grep -q '^#!.*node'; then \
-      rm /usr/local/bin/claude \
-      && printf '#!/bin/sh\nexec /usr/local/bin/node %s "$@"\n' "$target" > /usr/local/bin/claude \
-      && chmod 755 /usr/local/bin/claude; \
-    fi
+COPY --from=claude /opt/claude /opt/claude
+RUN ln -s /opt/claude/claude /usr/local/bin/claude
 
 # The release's wheel: the image carries the version it is tagged with.
 COPY dist/*.whl /tmp/wheels/

@@ -202,8 +202,9 @@ shared by every project (in the container, a volume: [container.md](container.md
 | No Brewfile | nothing is installed; the session is still told how to start one |
 
 Anywhere `AGENTLOOP_BREW` is not `1` (a person's own Mac or Windows PC), none of this runs and
-sessions are not told of it. It is never on for Windows. It runs after the setup script, which a
-project may still have for what Homebrew does not give.
+sessions are not told of it. It is never on for Windows. It runs before the setup script, which a
+project may still have for what Homebrew does not give, so that script can use what the Brewfile
+installs: in the container, a script that runs `npm` needs `brew "node"` in the Brewfile.
 
 ### The copy a loop keeps
 
