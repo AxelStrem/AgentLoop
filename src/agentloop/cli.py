@@ -73,6 +73,10 @@ def _parser() -> argparse.ArgumentParser:
     build = sub.add_parser("build", help="make a runnable copy of the app at another path")
     build.add_argument("--to", help="where to build; the settings' install field when left out")
     sub.add_parser("version", help="print the version")
+    tracker = sub.add_parser("tracker", help="tracker.py on a loop's tracker, with its server and key: as a session runs it, "
+                                             "for a project's script run by hand - agentloop tracker <loop> append ...")
+    tracker.add_argument("loop")
+    tracker.add_argument("args", nargs=argparse.REMAINDER, help="the command and its arguments, as tracker.py takes them")
     acc = sub.add_parser("accounts", help="this machine's Claude accounts: list them, add one as a worker, log one in")
     acc_sub = acc.add_subparsers(dest="action", metavar="action")
     acc_sub.add_parser("list", help="the workers, whether each is logged in, and the folders found not yet added (the default)")
@@ -270,6 +274,44 @@ def _run(args: argparse.Namespace) -> int:
         red = colours.ansi if colours.wanted(choice, sys.stderr) else colours.plain
         print(red(f"agentloop run: {error}", "Red"), file=sys.stderr)
         return 2
+
+
+def _tracker(args: argparse.Namespace) -> int:
+    """tracker.py on a loop's tracker, as a person runs it (item bench-record): a project's script
+    keeping its results in the tracker - `append` - when it runs by hand and not in a session. It
+    is given what a session reaches the server with - the server, the key file, the tracker, the
+    copies kept of it, and where tracker.py and its Python are - and nothing that says a loop runs
+    it, so what it files is not flagged auto; its comments are signed by the person."""
+    import getpass
+    import os
+    import tempfile
+    import subprocess
+
+    from agentloop import config, loop, session, tools
+
+    try:
+        machine = config.load_machine()
+        found = loop.find_loop(machine, args.loop)
+        overseer = config.overseer_for(machine.settings, found)
+    except (config.ConfigError, loop.LoopError) as error:
+        print(f"agentloop tracker: {error}", file=sys.stderr)
+        return 2
+    if not overseer:
+        print(f"agentloop tracker: loop {args.loop} names no Overseer server, nor does its worker", file=sys.stderr)
+        return 2
+    try:
+        author = getpass.getuser()
+    except (KeyError, OSError):
+        author = "someone"
+    given = session.session_variables(author=author, scratch=Path(tempfile.gettempdir()), tracker=found.tracker,
+                                      item="", overseer=overseer)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("OVERSEER_", "AGENT_", "AGENTIC_", "AGENTLOOP_TRACKER", "AGENTLOOP_PYTHON"))}
+    env.update({k: v for k, v in given.items() if v is not None and k.startswith(("OVERSEER_", "AGENTLOOP_"))
+                and k != "OVERSEER_ITEM"})
+    env["AGENT_AUTHOR"] = author
+    rest = args.args[1:] if args.args[:1] == ["--"] else args.args
+    return subprocess.run([sys.executable, str(tools.path("tracker.py")), *rest], env=env).returncode
 
 
 def _runner(args: argparse.Namespace) -> int:
@@ -591,6 +633,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run(args)
     if args.command == "voice":
         return _voice(args)
+    if args.command == "tracker":
+        return _tracker(args)
     if args.command == "accounts":
         return _accounts(args)
     if args.command == "review":

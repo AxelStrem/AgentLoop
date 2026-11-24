@@ -145,6 +145,22 @@ runs before the next session. `agentloop setup <loop>` runs it in a terminal if 
 A machine that already has the tools, such as the owner's own, sets `setup` to `"off"`, in its
 `defaults` or in a loop's settings.
 
+A project's own script can keep its results in its tracker, in a list the project's document
+declares of its own - a tab it added, as Brocessor keeps its benchmark runs:
+
+```sh
+"$AGENTLOOP_PYTHON" "$AGENTLOOP_TRACKER" append <list> @record.json
+```
+
+Every session has `AGENTLOOP_TRACKER`, the path of `tracker.py`, and `AGENTLOOP_PYTHON`, the
+Python to run it with; the server, the key file and the tracker are set for it already, so the
+script never handles the key. `<list>` is the list's address under the tracker's root, and the
+record is a JSON object: each field typed by its JSON - text, a whole number, any other number,
+true or false - or given as `{"Timestamp": "..."}`, and a list of objects appended under the new
+entry. The lists `tracker.py` governs - Items, History, Features and the template's others - are
+refused. Run by hand, outside a session, the same is `agentloop tracker <loop> append <list>
+@record.json`, which runs `tracker.py` with that loop's server, key and tracker.
+
 ```sh
 #!/bin/sh
 # setup.sh: Rust for the project's sessions, in its own folder.

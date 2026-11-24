@@ -66,6 +66,7 @@ agentloop status [<loop>]
 agentloop run <loop>       # one loop in this terminal, as run-agent-loop.ps1
 agentloop run <loop> --dry [--item <handle>]   # stop where the first session would begin: no session run
 agentloop review <project> [<run>] [--all]   # what a run did and cost, as review-run.py
+agentloop tracker <loop> <command> ...      # tracker.py on the loop's tracker, with its server and key
 agentloop --help           # every command; <command> --help for its options
 ```
 

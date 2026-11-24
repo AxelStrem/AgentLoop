@@ -250,6 +250,11 @@ def session_variables(
         "OVERSEER_TRACKER": tracker,
         # And where an item it files into another project came from.
         "OVERSEER_ITEM": item,
+        # Where a project's own script finds tracker.py and the Python to run it with, to keep its
+        # results in a list of the tracker's own (`tracker.py append`, item bench-record) without
+        # ever handling the key: the OVERSEER_* above reach the server for it.
+        "AGENTLOOP_TRACKER": _TRACKER_PY,
+        "AGENTLOOP_PYTHON": _slashes(sys.executable),
         # No variable at all for the default account, not one naming ~/.claude: given one, claude
         # keeps its state inside it and starts as if new.
         "CLAUDE_CONFIG_DIR": str(config_dir(claude)) if claude else None,
@@ -658,3 +663,7 @@ def parse_final(text: str | None) -> FinalLines:
 
 def _slashes(path: Any) -> str:
     return str(path).replace("\\", "/")
+
+
+# tracker.py, as a project's script is told where it is: found once, as the app starts.
+_TRACKER_PY = _slashes(tools.path("tracker.py"))

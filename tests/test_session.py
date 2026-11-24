@@ -97,6 +97,9 @@ def test_variables(tmp_path, monkeypatch):
 
     plain = session.session_variables(author="a", scratch=tmp_path, tracker="t", item="p:x")
     assert plain["CLAUDE_CONFIG_DIR"] is None
+    # A project's script finds tracker.py and its Python from these (item bench-record).
+    assert plain["AGENTLOOP_TRACKER"].endswith("/tracker.py") and "\\" not in plain["AGENTLOOP_TRACKER"]
+    assert Path(plain["AGENTLOOP_TRACKER"]).is_file() and Path(plain["AGENTLOOP_PYTHON"]).is_file()
     assert "OVERSEER_URL" not in plain and "OVERSEER_KEY_FILE" not in plain and "OVERSEER_CACHE" not in plain
 
 
