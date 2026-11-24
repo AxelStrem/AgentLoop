@@ -77,6 +77,11 @@ DEFAULTS: dict[str, Any] = {
     # that turns a recording in a comment into text before the loop takes an item, with that
     # engine's own keys (voice.py). "off" never transcribes, and leaves such items held.
     "transcribe": {"engine": "off"},
+    # Not the script's, which only prints them (item leftfiles): a file changed before a session
+    # and again by it is left uncommitted; once one has been left this many sessions in a row, or
+    # this many hours, the loop takes no item until it is committed or stashed.
+    "leftSessions": 3,
+    "leftHours": 24,
 }
 
 # Settings the app had once and has no more: still accepted where they were written - a machine's
@@ -258,10 +263,10 @@ def check_run_settings(where: str, field: str, settings: Any) -> None:
         elif key in ("push", "autoStart"):
             if not isinstance(value, bool):
                 raise ConfigError(where, at, "true or false")
-        elif key == "pushTries":
+        elif key in ("pushTries", "leftSessions"):
             if not _is_int(value) or value < 1:
                 raise ConfigError(where, at, "a whole number, 1 or more")
-        elif key in ("askEveryMinutes", "autoStartMinutes"):
+        elif key in ("askEveryMinutes", "autoStartMinutes", "leftHours"):
             if not _is_number(value) or value <= 0:
                 raise ConfigError(where, at, "a number above 0")
         elif not _is_int(value) or value < 0:

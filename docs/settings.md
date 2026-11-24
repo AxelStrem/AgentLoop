@@ -519,6 +519,8 @@ One set of keys, wherever they are written:
 | `autoStartMinutes` | `10` | none |
 | `acceptDefinition` | `"auto"`; or `"ask"`. Not in a project's settings | none: see "When the definition changes" |
 | `setup` | `"auto"`; or `"off"`. Not in a project's settings | none: see "Its setup script" |
+| `leftSessions` | `3` | none: see "Files left uncommitted" |
+| `leftHours` | `24` | none |
 | `transcribe` | `{"engine": "off"}`; or `"whisper"` or `"openai"`, with that engine's own keys | none: see [voice.md](voice.md) |
 
 A route is `{"model": "opus", "effort": "medium"}`. The `voice` route is not a session's: it is the
@@ -531,6 +533,21 @@ limits pause it. The script's `-MaxIterations`, its `-StopAtWeeklyUse` and its l
 items have no setting here: a worker's weekly limit stands for `-StopAtWeeklyUse`. A `maxIterations`
 or `stopAtWeeklyUse` still written in a settings file or a project's definition is accepted and
 ignored.
+
+### Files left uncommitted
+
+Before each session the loop notes what is already changed in its repositories - the owner's work
+in progress - and after it commits only what the session changed besides. A file changed before
+the session and again by it holds the owner's work and the session's together, and is left out of
+the commit, as the script leaves it (item leftfiles). It is not only said in the output: the loop
+keeps a count of such files in `left.json` in its folder, names them in its row on the page and in
+a comment on the session's item, and once one has been left `leftSessions` sessions in a row - each
+session counts while the file is still changed, whether it touched it or not - or for `leftHours`
+hours, the loop takes no item, `held`, until it is committed or stashed; it looks again every few
+seconds, and goes on by itself. A file changed before a session and not touched by it is said once
+a run in the output, and holds nothing up. Only the session's own hunks of such a file are never
+committed: they were written against code that is in no commit, and a commit of them alone may not
+build.
 
 An item flagged `trusted` - a flag a person sets, in the project template from version 2 - is
 finished by the loop once it reaches `testing` (item trusted-item): right after the session that

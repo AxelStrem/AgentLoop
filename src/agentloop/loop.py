@@ -84,6 +84,12 @@ Differences from the script, each deliberate:
 - An item flagged trusted is finished by the loop once it is at testing (item trusted-item,
   `finish_trusted`): after the session's work record, and before each pick for one that came to
   testing otherwise. The script has no trusted flag.
+- A file a session changed that was changed before it too is left uncommitted, as `Commit-Session`
+  leaves it, but not only said in the output (item leftfiles, `keep_left`): it is counted in
+  `left.json` beside status.json from session to session, named on the page and in a comment on
+  the session's item, and once one has been left `leftSessions` sessions in a row or `leftHours`
+  hours the loop takes no item until it is committed or stashed (`_left_hold`). The script only
+  prints it.
 - Only Windows has been tried: this machine is Windows.
 """
 
@@ -564,6 +570,9 @@ class Run:
         self.state_file = self.loop_dir / "running.json"
         self.claims_file = claims_path(self.loop_dir)
         self.status_file = self.loop_dir / "status.json"
+        # The files left uncommitted, changed before a session and again, from one session to the
+        # next and from one run to the next (item leftfiles): commits.track_left's record.
+        self.left_file = self.loop_dir / "left.json"
         self.system_file = self.loop_dir / "system.md"
         self.session_settings = self.loop_dir / "session-settings.json"
         # Where a push replays the clones' commits onto their upstream, a worktree for each.
@@ -617,6 +626,8 @@ class Run:
         # left, and whether a sit or a leave has failed - said once a run (item projbench).
         self.bench_cleared = False
         self.bench_failed = False
+        # The files changed before a session and not touched by it that this run has said, once.
+        self.told_untouched: set[tuple[str, str]] = set()
 
     def _status(self, **changes) -> None:
         """status.json, for the page: written on each change, whole."""
@@ -1154,6 +1165,7 @@ class Run:
         done = commits.commit_session(before, message, self.repos)
         for said in done.said:
             self.say("  " + said, "DarkGreen" if said.startswith("committed") else "DarkYellow")
+        self.keep_left(item, done)
         self.commits = done.commits
         self.add_attempt(item, kind, route, session_id, outcome, now)
         self.note_outcome(item, route, now)
@@ -1533,7 +1545,8 @@ class Run:
             self._status(loop=self.loop.name, project=self.project, worker=self.worker.name, state="running", pid=os.getpid(),
                          started=self._now(), item=None, title=None, kind=None, session=None, cost=0.0,
                          usage=None, until=None, limit=None, ended=None, exit=None, killed=False, error=None,
-                         transcribe=self.transcribing(), unheard=0, voiceProblem=None)
+                         transcribe=self.transcribing(), unheard=0, voiceProblem=None,
+                         leftFiles=None, heldFor=None)
             code = 1
             error = None
             try:
@@ -1602,6 +1615,8 @@ class Run:
                 ended = self._brew()
             if ended is None:
                 ended = self._pause()
+            if ended is None:
+                ended = self._left_hold()
             if ended is not None:
                 status = ended
                 break
@@ -1986,7 +2001,7 @@ class Run:
         `agentloop accept` - then goes on with it. A stop or a kill still ends the wait."""
         self.say(f" {self.project}'s definition has changed since this loop accepted it. No session runs until the change is accepted, "
                  f"on the page or with agentloop accept {self.loop.name}; agentloop show-definition {self.loop.name} shows what changed.", "Yellow")
-        self._status(state="held", item=None, title=None, kind=None, session=None, until=None, limit=None)
+        self._status(state="held", heldFor=None, item=None, title=None, kind=None, session=None, until=None, limit=None)
         while True:
             if self._stop_asked("held"):
                 return 0
@@ -1998,6 +2013,92 @@ class Run:
                 self.say(" The change was accepted; going on with it.", "Green")
                 return self._take(held["definition"])
             self.clock.sleep(usage.POLL_SECONDS)
+
+    # Files left uncommitted (item leftfiles)
+
+    def _read_left(self) -> commits.LeftRecord:
+        try:
+            record = json.loads(self.left_file.read_bytes().decode("utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return record if isinstance(record, dict) else {}
+
+    def _still(self) -> dict[str, set[str]]:
+        """What is changed in each repository now, by its name, as the record keeps them."""
+        return {repo.name: set(files) for repo, files in commits.snapshot(self.repos).items()}
+
+    def _write_left(self, record: commits.LeftRecord) -> None:
+        if record:
+            write_json(self.left_file, record)
+        else:
+            remove(self.left_file)
+        self._status(leftFiles=commits.left_list(record) or None)
+
+    def keep_left(self, item: dict, done: commits.Committed) -> None:
+        """After a session's commit: the files it left uncommitted, changed before it and again,
+        counted in the record and named on the page and on its item - where people look, not only
+        in the log. A file changed before it and not touched is said once a run, and holds nothing
+        up: it is only the owner's work in progress. The script only prints them."""
+        for repo, paths in done.untouched.items():
+            new = [path for path in paths if (repo, path) not in self.told_untouched]
+            if new:
+                self.told_untouched.update((repo, path) for path in new)
+                self.say(f"  Changed before this session and not by it, left for the owner in {repo}: {', '.join(new)}", "DarkGray")
+        record = commits.track_left(self._read_left(), done.left, self._still(), self._now())
+        self._write_left(record)
+        if done.left:
+            self.note_left(item, done.left, record)
+
+    def note_left(self, item: dict, left: dict[str, list[str]], record: commits.LeftRecord) -> None:
+        """A comment on the session's item naming the files it changed that are in no commit."""
+        lines = []
+        for repo, paths in sorted(left.items()):
+            for path in paths:
+                times = record.get(repo, {}).get(path, {}).get("sessions") or 1
+                lines.append(f"- `{repo}/{path}` - left {times} {'session' if times == 1 else 'sessions'} in a row")
+        text = ("**Left uncommitted.** These files had changes in the working tree before this session, and the "
+                "session changed them again, so the commit after it left them out: what the session did to them "
+                "is in no commit.\n\n" + "\n".join(lines) + "\n\n"
+                f"Commit them, or stash them. Once one has been left {self._s('leftSessions')} sessions in a row, or "
+                f"for {figure(self._s('leftHours'))} hours, the loop takes no item until they are.")
+        folder = self.scratch or self.loop_dir
+        folder.mkdir(parents=True, exist_ok=True)
+        note = folder / "left-uncommitted.md"
+        note.write_text(text, encoding="utf-8")
+        done = self._tracker("note", item["handle"], f"@{_slashes(note)}")
+        if done.returncode != 0:
+            said = (done.stdout + done.stderr).decode("utf-8", errors="replace").strip().splitlines()
+            self.say(f"  The files left uncommitted could not be noted on {item['handle']}: {said[-1] if said else 'no reason given'}", "DarkYellow")
+
+    def _left_hold(self) -> int | None:
+        """Takes no item while a file has been left uncommitted - changed before a session and
+        again - `leftSessions` sessions in a row or `leftHours` hours (item leftfiles), until the
+        owner commits or stashes it; looked at again every few seconds. None to go on; 0 when a
+        stop or a kill ended the wait. The script has nothing like it."""
+        record = self._read_left()
+        if not record:
+            self._status(leftFiles=None)
+            return None
+        record = commits.still_left(record, self._still())
+        self._write_left(record)
+        late = commits.overdue(record, self._s("leftSessions"), float(self._s("leftHours")),
+                               datetime.fromtimestamp(self.clock.now()).astimezone())
+        if not late:
+            return None
+        names = ", ".join(f"{repo}/{path}" for repo, path in late)
+        self.say(f" Left uncommitted for too long, changed before sessions and again by them: {names}. No item is taken until "
+                 "they are committed or stashed; the loop goes on by itself once they are.", "Yellow")
+        self._status(state="held", heldFor="left", item=None, title=None, kind=None, session=None, until=None, limit=None)
+        while late:
+            if self._stop_asked("held for files left uncommitted"):
+                return 0
+            self.clock.sleep(usage.POLL_SECONDS)
+            record = commits.still_left(self._read_left(), self._still())
+            self._write_left(record)
+            late = [found for found in late if found[1] in record.get(found[0], {})]
+        self.say(" The files left uncommitted are committed or stashed; going on.", "Green")
+        self._status(state="running", heldFor=None)
+        return None
 
     def _over(self) -> usage.Over | None:
         """The window the worker is past its own limit in, unapproved (item h87x). Its limits are

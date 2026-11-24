@@ -56,6 +56,8 @@ def test_settings_layer_over_each_other():
     (lambda s: s["workers"].append(dict(s["workers"][0])), "workers[2].name"),
     (lambda s: s["workers"][0].update(signIn={"token": "sk-ant-oat01-xyz"}), "workers[0].signIn"),
     (lambda s: s["workers"][0].update(limits={"five_hour": 80}), "workers[0].limits.five_hour"),
+    (lambda s: s["defaults"].update(leftSessions=0), "defaults.leftSessions"),
+    (lambda s: s["defaults"].update(leftHours=-1), "defaults.leftHours"),
 ])
 def test_wrong_settings_are_refused_where_they_are(tmp_path, change, where):
     raw = _example_settings()

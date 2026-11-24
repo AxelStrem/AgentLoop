@@ -25,12 +25,14 @@ const SETTINGS = {
   autoStartMinutes: "While it waits for work, how often to look for an item.",
   acceptDefinition: "When the project's definition changes: auto goes on with it at once, ask runs no more sessions until the change is accepted.",
   setup: "Run the setup script the project's definition names for this system before its sessions: auto runs it when it changes, off never does.",
+  leftSessions: "Take no item once a file changed before a session and again has been left uncommitted this many sessions in a row.",
+  leftHours: "Take no item once such a file has been left uncommitted this many hours.",
   transcribe: "The speech-to-text engine that transcribes voice messages before an item is taken, and its own keys as JSON; off leaves them for a loop that transcribes.",
 };
 const ENGINES = ["off", "whisper", "openai"];
 const COMPLEXITIES = ["trivial", "low", "medium", "high", "unassigned"];
 const ROUTE_KEYS = ["triage", ...COMPLEXITIES, "voice"];
-const INTEGERS = ["buildInTriageUpTo", "chainUpTo", "repeatUpTo", "chainContextUpTo", "pushTries"];
+const INTEGERS = ["buildInTriageUpTo", "chainUpTo", "repeatUpTo", "chainContextUpTo", "pushTries", "leftSessions"];
 // The SGR codes colours.py writes, by the class the page draws each in.
 const SGR = {
   30: "black", 31: "darkred", 32: "darkgreen", 33: "darkyellow", 34: "darkblue", 35: "darkmagenta", 36: "darkcyan", 37: "gray",
@@ -285,6 +287,19 @@ function renderLoops() {
       stateCell.push(h("span", { class: "chip",
         title: off ? "Set transcribe on this loop, or run one that has it, to have them transcribed" : "Transcribed before this loop takes its next item",
         text: `${s.unheard === 1 ? "1 item waits for its voice messages" : s.unheard + " items wait for their voice messages"} to be transcribed${off ? " - transcription is off on this loop" : ""}` }));
+    }
+    // Files changed before a session and again by it, left uncommitted (item leftfiles): named
+    // here, and once one has been left too long the loop takes no item until they are committed
+    // or stashed.
+    if (s.leftFiles && s.leftFiles.length) {
+      const names = s.leftFiles.map((f) => `${f.repo}/${f.path} (${f.sessions === 1 ? "1 session" : `${f.sessions} sessions`}, since ${whenText(f.since)})`);
+      if (s.state === "held" && s.heldFor === "left") {
+        stateCell.push(h("span", { class: "problem", text: `takes no item until these are committed or stashed: ${names.join(", ")}` }));
+      } else {
+        stateCell.push(h("span", { class: "problem",
+          title: "Changed before a session and again by it, so in no commit: commit them, or stash them",
+          text: `left uncommitted, changed before a session and again: ${names.join(", ")}` }));
+      }
     }
     if (s.voiceProblem) stateCell.push(h("span", { class: "problem", text: `voice message not transcribed: ${s.voiceProblem}` }));
     // The project's setup script (item project-setup): a failed run with the end of its output,

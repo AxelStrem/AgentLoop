@@ -116,6 +116,10 @@ class LoopStatus:
     transcribe: bool | None = None
     unheard: int = 0
     voiceProblem: str | None = None
+    # Files left uncommitted, changed before a session and again (item leftfiles), as {repo, path,
+    # sessions, since}; and what a held loop waits for: "left" for those, none for a definition.
+    leftFiles: list | None = None
+    heldFor: str | None = None
     # How its last run ended (Run._ended_by): stop, kill, autoOff, empty, error or done.
     endedBy: str | None = None
     # Not running, and `serve` would start it again: why (item autoloops-start).

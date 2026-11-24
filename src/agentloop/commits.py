@@ -16,6 +16,12 @@ Differences from the script, each deliberate:
 - Trackers are on a server only (item simplify): no tracker is a file in a repository, so none is
   left out of the count of a session's lines, or committed for the items a session filed into
   another project's, and every commit record's `tracker` is false.
+- A file left uncommitted because it was changed before a session and again is not only said
+  (item leftfiles): `Committed.left` names each, and `track_left` keeps a record of them from one
+  session to the next, so that the loop can say them on the page and on the item, and stop taking
+  items once one has been left too long (`overdue`). The script only prints them.
+  Only the session's own hunks of such a file are never committed: they were written against the
+  owner's uncommitted code, and a commit of them alone may refer to code that is in no commit.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
@@ -203,11 +210,15 @@ def session_lines(before: Snapshot, repos: list[Path], lock: Path | None = None)
 @dataclass
 class Committed:
     """What `commit_session` did: whether every commit worked, a record of each - the script's
-    `$script:Commits` - and the lines to print."""
+    `$script:Commits` - and the lines to print. `left` names, by repository, the files left
+    uncommitted because they were changed before the session and again by it; `untouched` those
+    changed before it and not by it, which are only the owner's and stay so."""
 
     ok: bool = True
     commits: list[dict] = field(default_factory=list)
     said: list[str] = field(default_factory=list)
+    left: dict[str, list[str]] = field(default_factory=dict)
+    untouched: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _shortstat(repo: Path) -> dict[str, int]:
@@ -241,7 +252,11 @@ def commit_session(before: Snapshot, message: str, repos: list[Path], *, lock: P
             was = before.get(repo, {})
             mine = _new(before, repo, now)
             mixed = [path for path in now if path in was and was[path] != now[path]]
+            same = [path for path in now if path in was and was[path] == now[path]]
+            if same:
+                result.untouched[repo.name] = same
             if mixed:
+                result.left[repo.name] = mixed
                 result.said.append(f"left uncommitted in {repo.name}, already changed before this session: {', '.join(mixed)}")
             if not mine:
                 continue
@@ -280,3 +295,64 @@ def commit_session(before: Snapshot, message: str, repos: list[Path], *, lock: P
             # holds a tracker now, and it is kept so that the records read as the script's do.
             result.commits.append({"repo": repo.name, "hash": _head(repo, "%h"), "tracker": False, **_shortstat(repo)})
     return result
+
+
+# Files left uncommitted, from one session to the next (item leftfiles)
+
+LeftRecord = dict[str, dict[str, dict]]
+
+
+def track_left(record: LeftRecord, left: dict[str, list[str]], still: dict[str, set[str]], at: str) -> LeftRecord:
+    """The record of files left uncommitted, after one more session: by repository name, each
+    path with `since`, when it was first left, and `sessions`, how many sessions in a row it has
+    stayed uncommitted since. A file the session left is added, or counted once more; one already
+    in the record is counted once more while it is still changed - `still`, by repository name -
+    whether the session touched it or not, since it is still in no commit; one no longer changed,
+    committed or stashed by the owner, is dropped."""
+    out: LeftRecord = {}
+    for repo in set(record) | set(left):
+        changed_now = still.get(repo, set())
+        files: dict[str, dict] = {}
+        for path, kept in record.get(repo, {}).items():
+            if path in changed_now:
+                files[path] = {"since": kept.get("since") or at, "sessions": int(kept.get("sessions") or 0) + 1}
+        for path in left.get(repo, []):
+            if path not in files:
+                files[path] = {"since": at, "sessions": 1}
+        if files:
+            out[repo] = files
+    return out
+
+
+def still_left(record: LeftRecord, still: dict[str, set[str]]) -> LeftRecord:
+    """The record with what is no longer changed taken out, counting nothing: for a look between
+    sessions, after the owner may have committed or stashed some of it."""
+    out: LeftRecord = {}
+    for repo, files in record.items():
+        kept = {path: value for path, value in files.items() if path in still.get(repo, set())}
+        if kept:
+            out[repo] = kept
+    return out
+
+
+def overdue(record: LeftRecord, sessions: int, hours: float, now: datetime) -> list[tuple[str, str]]:
+    """The files of the record left `sessions` sessions in a row, or for `hours` or more, as
+    (repository name, path). A `since` that cannot be read counts by sessions alone."""
+    found = []
+    for repo, files in sorted(record.items()):
+        for path, kept in sorted(files.items()):
+            late = int(kept.get("sessions") or 0) >= sessions
+            try:
+                since = datetime.fromisoformat(str(kept.get("since")))
+                late = late or (now - since).total_seconds() >= hours * 3600
+            except (TypeError, ValueError):
+                pass
+            if late:
+                found.append((repo, path))
+    return found
+
+
+def left_list(record: LeftRecord) -> list[dict]:
+    """The record as the loop's status gives it to the page: one entry a file."""
+    return [{"repo": repo, "path": path, "sessions": kept.get("sessions"), "since": kept.get("since")}
+            for repo, files in sorted(record.items()) for path, kept in sorted(files.items())]
