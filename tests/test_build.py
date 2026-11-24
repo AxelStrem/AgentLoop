@@ -1,9 +1,7 @@
 import json
-import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -91,19 +89,6 @@ def test_launcher_passes_arguments_through(source, tmp_path):
     assert "a file with spaces.psd1" in done.stderr
 
 
-def test_sh_launcher_text():
-    text = build.sh_launcher("/usr/bin/my python")
-    assert text.startswith("#!/bin/sh\n")
-    assert "exec '/usr/bin/my python' \"$here/versions/$version\" \"$@\"" in text
-    assert "\r" not in text
-
-
-def test_cmd_launcher_text():
-    text = build.cmd_launcher("C:/Python/python.exe")
-    assert '"C:/Python/python.exe" "%~dp0versions\\%AGENTLOOP_VERSION%" %*' in text
-    assert text.endswith("exit /b %errorlevel%\r\n")
-
-
 def test_a_second_build_leaves_the_first_alone(source, tmp_path):
     package = source / "src" / "agentloop"
     first = build.build(tmp_path / "out", package)
@@ -123,21 +108,6 @@ def test_a_second_build_leaves_the_first_alone(source, tmp_path):
     assert third.kept == [first.id]
 
 
-def test_two_builds_in_one_second_do_not_share_a_folder(source, tmp_path):
-    now = datetime(2026, 10, 24, 10, 0, 0, tzinfo=timezone.utc)
-    a = build.build(tmp_path / "out", source / "src" / "agentloop", now=now)
-    b = build.build(tmp_path / "out", source / "src" / "agentloop", now=now)
-    assert a.id.startswith("20261024-100000-") and b.id == a.id + "-2"
-
-
-def test_no_git_still_builds(tmp_path):
-    package = tmp_path / "plain" / "src" / "agentloop"
-    shutil.copytree(SRC / "agentloop", package, ignore=shutil.ignore_patterns("__pycache__"))
-    built = build.build(tmp_path / "out", package)
-    assert built.id.endswith("-nogit")
-    assert "no commit, built " in _run(sys.executable, tmp_path / "out" / "versions" / built.id, "version").stdout
-
-
 def test_refuses_a_foreign_folder(source, tmp_path):
     foreign = tmp_path / "out"
     foreign.mkdir()
@@ -152,19 +122,7 @@ def test_refuses_a_target_inside_the_repository(source):
         build.build(source / "dist", source / "src" / "agentloop")
 
 
-def test_refuses_to_build_from_a_build(source, tmp_path):
-    built = build.build(tmp_path / "out", source / "src" / "agentloop")
-    copy = tmp_path / "out" / "versions" / built.id / "agentloop"
-    with pytest.raises(build.BuildError, match="built copy"):
-        build.build(tmp_path / "other", copy)
-    assert not (tmp_path / "other").exists()
-
-
 # The command works on the machine's settings, here redirected to a temporary home.
-
-def test_command_needs_a_place(home, capsys):
-    assert build.run(None) == 2
-    assert "give --to" in capsys.readouterr().err
 
 
 def test_command_writes_install_and_then_uses_it(as_source, tmp_path, home, capsys):
@@ -177,42 +135,3 @@ def test_command_writes_install_and_then_uses_it(as_source, tmp_path, home, caps
     assert len(list((tmp_path / "out" / "versions").iterdir())) == 2
 
 
-def test_command_keeps_the_other_settings(as_source, tmp_path, home):
-    config.save_settings({**config.empty_settings(), "defaults": {"askEveryMinutes": 60}, "later": 1})
-    assert build.run(str(tmp_path / "out")) == 0
-    settings = json.loads((home / "config" / "settings.json").read_text(encoding="utf-8"))
-    assert settings["defaults"] == {"askEveryMinutes": 60} and settings["later"] == 1
-
-
-def test_command_reports_a_refusal_without_a_traceback(as_source, tmp_path, home, capsys):
-    (tmp_path / "out").mkdir()
-    (tmp_path / "out" / "x").write_text("x")
-    assert build.run(str(tmp_path / "out")) == 2
-    assert capsys.readouterr().err.startswith("agentloop build: ")
-    assert not (home / "config" / "settings.json").exists()
-
-
-def test_build_py_wrapper(tmp_path, home):
-    env = {**os.environ, "AGENTLOOP_HOME": str(home)}
-    # Built from the real source tree, as the owner builds; the copy is outside it.
-    done = subprocess.run([sys.executable, str(ROOT / "build.py"), str(tmp_path / "out")], capture_output=True, text=True, env=env, timeout=120)
-    assert done.returncode == 0, done.stderr
-    assert (tmp_path / "out" / "current").is_file()
-
-
-def test_install_must_be_a_path_or_null(tmp_path):
-    raw = config.empty_settings()
-    raw["install"] = 3
-    with pytest.raises(config.ConfigError, match="install"):
-        config.parse_settings(raw, tmp_path / "settings.json")
-    raw["install"] = None
-    config.parse_settings(raw, tmp_path / "settings.json")
-
-
-def test_describe_an_installed_package(tmp_path, source):
-    # A wheel's package, in site-packages: no build record and no repository of its own (item
-    # package). The same package in its source repository is "from source".
-    installed = tmp_path / "site-packages" / "agentloop"
-    shutil.copytree(source / "src" / "agentloop", installed)
-    assert build.describe(installed).endswith("(installed)")
-    assert build.describe(source / "src" / "agentloop").endswith("(from source)")

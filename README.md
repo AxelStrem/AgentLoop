@@ -6,7 +6,7 @@ each loop, several at once on different Claude accounts, and shows each one's ou
 
 It needs:
 
-- **Python 3.11 or newer.** Nothing else from PyPI; `pytest` and `pytest-xdist` are for the tests only.
+- **Python 3.11 or newer.** Nothing else from PyPI; `pytest` is for the tests only.
 - **git**, on `PATH`.
 - **Claude Code** (`claude`), on `PATH` or named in the settings, logged in to each account a loop
   will use.
@@ -150,17 +150,16 @@ how to set up Whisper (`agentloop voice setup`) and try an engine on a recording
 
 ```sh
 pip install -e .[test]
-python -m pytest -q -n auto
+python -m pytest -q
 ```
 
-`-n auto` runs the suite on every core (pytest-xdist); without it, the tests run one after another.
-
-The tests never run a real Claude session or reach a live server. They use a fake `claude`
-(`tests/fake_claude`) that answers with a recorded session, and serve a copy of a tracker on
-loopback with `overseer-server`: the build `AGENTLOOP_OVERSEER_SERVER` names, or else the one on
-`PATH`. Without one, the tests that need a server are skipped, and `-rs` lists them with the
-reason. Build one from a clone of Overseer with
-`cargo build --release --features server --bin overseer-server`.
+The suite is kept small, and runs in seconds: it checks what would break an install or a loop
+outright. The package imports and each command starts; settings are read, written and refused where
+they are wrong; tracker.py reads a tracker and its project template from the files in
+`tests/fixtures/tracker`, with a stub of the server in the test's own process; the commit step
+commits only a session's own changes; and a build makes a runnable copy. No test runs a Claude
+session, starts an Overseer server or reaches the network, so the suite needs nothing but Python,
+pytest and git.
 
 ## Licence
 

@@ -1,7 +1,7 @@
 # Projects and machine settings
 
-What each of AgentLoop's settings holds, how it is written, and where it lives. The examples in
-[`examples/`](examples/) are loaded by the tests, so they stay ones that work.
+What each of AgentLoop's settings holds, how it is written, and where it lives. The example settings
+in [`examples/`](examples/) are loaded by the tests, so they stay ones that load.
 
 A loop is made of three things:
 
@@ -703,7 +703,7 @@ and a loop that does not place one is refused on start.
 
 ## Examples
 
-Made-up projects, loaded by the tests.
+Made-up projects. The tests load the settings.
 
 - [`examples/quill.project.os`](examples/quill.project.os) - a definition: one repository, a place,
   the one system it runs on, a setting, and a tool, [`look.py`](examples/tools/quill.project/look.py),

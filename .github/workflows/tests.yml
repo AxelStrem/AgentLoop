@@ -3,14 +3,10 @@
 # The repository is private for now, where a macOS minute costs ten Linux ones and a Windows minute
 # two. So a push to main, and a run started by hand, test on all three systems. Every other push
 # and every pull request test on Linux alone. A tag is not tested again: it names a commit the push
-# to its branch tested already. The suite runs on every core of the runner (pytest-xdist).
+# to its branch tested already.
 #
-# The tests serve their trackers with overseer-server, which also hands tracker.py the project
-# template from the library it was built beside. Without it, most of the suite skips, and a run
-# that skips proves little. So this checks Overseer out and builds the server. Overseer is read with the
-# OVERSEER_TOKEN secret if there is one (a read-only token, needed while Overseer is private), or
-# else with this run's own token, which can read it once it is public. When Overseer's releases
-# carry the server (overseer:ci), the build can become a download.
+# The suite is small and needs nothing but Python, pytest and git: no test starts an Overseer
+# server or reaches the network (item prunetests), so a run takes a minute or two on any system.
 
 name: tests
 
@@ -35,37 +31,16 @@ jobs:
       matrix:
         os: ${{ fromJSON((github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 15
     defaults:
       run:
         shell: bash
     steps:
       - name: Check out AgentLoop
-        uses: actions/checkout@v4
-
-      - name: Check out Overseer
-        uses: actions/checkout@v4
-        with:
-          repository: AxelStrem/Overseer
-          path: overseer
-          token: ${{ secrets.OVERSEER_TOKEN || github.token }}
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache the server's build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: overseer/src-tauri -> target
-
-      # Only the server: the desktop app is behind a feature this leaves off, so no webview or GTK
-      # is needed on any system.
-      - name: Build overseer-server
-        working-directory: overseer/src-tauri
-        run: cargo build --release --features server --bin overseer-server
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           # The oldest Python the app supports, so that nothing newer slips in.
           python-version: "3.11"
@@ -73,19 +48,9 @@ jobs:
       - name: Install AgentLoop
         run: python -m pip install -e ".[test]"
 
-      # The server the tests serve their trackers with (tests/conftest.py); without it they skip.
-      - name: Point the tests at the server
-        run: |
-          exe=""
-          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
-          echo "AGENTLOOP_OVERSEER_SERVER=$GITHUB_WORKSPACE/overseer/src-tauri/target/release/overseer-server$exe" >> "$GITHUB_ENV"
-
-      # -rsfE lists every skipped test and why, so a test that skipped where it should have run is
-      # seen in the log, and every failed or errored one too. Failed tests are also made
-      # annotations of the job (tests/conftest.py), which anyone can read through the API,
-      # where the log itself needs admin rights. A test still running after five minutes has hung: its stack is printed,
-      # and the job's timeout ends the run.
-      # On Windows too: each test process names the script's machine-wide mutexes for itself
-      # (tests/conftest.py), so the tests' projects, which share one name, keep out of each other's way.
+      # -rsfE lists every skipped test and why, and every failed or errored one. Failed tests are
+      # also made annotations of the job (tests/conftest.py), which anyone can read through the API,
+      # where the log itself needs admin rights. A test still running after two minutes has hung:
+      # its stack is printed, and the job's timeout ends the run.
       - name: Run the tests
-        run: python -m pytest -q -rsfE -n auto -o faulthandler_timeout=300
+        run: python -m pytest -q -rsfE -o faulthandler_timeout=120
