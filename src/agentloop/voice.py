@@ -334,23 +334,8 @@ def cleanup_prompt(*, description: str, handle: str, title: str, before: list[di
     return "\n".join(parts)
 
 
-def is_english(heard: dict) -> bool:
-    """Whether a recording was spoken in English: as the engine says, or - when it does not say, as
-    gpt-4o-transcribe never does - when nearly every letter of the text is a Latin one."""
-    language = str(heard.get("language") or "").strip().lower()
-    if language:
-        return language in ("en", "english")
-    letters = [ch for ch in str(heard.get("text") or "") if ch.isalpha()]
-    return not letters or sum(ch.isascii() for ch in letters) >= 0.9 * len(letters)
-
-
-def transcript_text(english: str, heard: dict) -> str:
-    """What is written under a recording: the English instructions, and what was said word for word
-    after them when it was said in another language - the cleanup may have got something wrong, and
-    a reader who speaks it can check."""
-    text = english.strip()
-    if is_english(heard):
-        return text
-    language = str(heard.get("language") or "").strip()
-    said = str(heard.get("text") or "").strip()
-    return f"{text}\n\n*As it was said{f' ({language})' if language else ''}:* {said}"
+def transcript_text(english: str) -> str:
+    """What is written under a recording: the English instructions alone. What was said word for
+    word is not kept beside them (item voice-tweaks): the cleanup is there to give the session clear
+    instructions, and the raw words under them would bring back what it left out."""
+    return english.strip()

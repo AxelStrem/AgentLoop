@@ -248,10 +248,12 @@ function renderLoops() {
         text: `${unrun.length === 1 ? "1 item" : unrun.length + " items"} for bots not run here` }));
     }
     // Items held until their voice messages are transcribed (item voice-loop): this loop does it
-    // before it takes an item, unless its transcription is off - then another loop must.
+    // before it takes an item, unless its transcription is off - then another loop must. That is
+    // nothing wrong: the items are only not free to take yet, so it is said plainly
+    // rather than as a warning (item voice-tweaks).
     if (s.unheard) {
       const off = s.transcribe === false;
-      stateCell.push(h("span", { class: "chip warn",
+      stateCell.push(h("span", { class: "chip",
         title: off ? "Set transcribe on this loop, or run one that has it, to have them transcribed" : "Transcribed before this loop takes its next item",
         text: `${s.unheard === 1 ? "1 item waits for its voice messages" : s.unheard + " items wait for their voice messages"} to be transcribed${off ? " - transcription is off on this loop" : ""}` }));
     }

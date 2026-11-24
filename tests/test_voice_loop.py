@@ -85,9 +85,9 @@ def test_an_unheard_item_is_transcribed_then_taken(project, fake_claude, heard):
     # The engine had the fetched recording, with the setting's keys.
     files, answer = heard
     assert files[0][1] == WHISPER and files[0][0].name == "2026-11-22T08-59-00.webm"
-    # Written under the recording, what was said in Russian after it.
-    assert body_of(p, "voiced") == (f"Listen: ![transcribed]({SOUND})\n> Do it, and thanks for the earlier work.\n>\n"
-                                    f"> *As it was said (ru):* {answer['value']['text']}")
+    # Written under the recording: the English alone, not what was said in Russian (item voice-tweaks).
+    assert body_of(p, "voiced") == f"Listen: ![transcribed]({SOUND})\n> Do it, and thanks for the earlier work."
+    assert answer["value"]["text"] not in body_of(p, "voiced")
     records = voice_records(p, "voiced")
     assert len(records) == 1 and records[0]["model"] == "claude-sonnet-5-5 (medium)" and records[0]["cost"] in ("0.02", 0.02)
     assert "moved" not in records[0]
@@ -99,16 +99,43 @@ def test_an_unheard_item_is_transcribed_then_taken(project, fake_claude, heard):
     assert not [f for f in (p.r.loop_dir / "voice").rglob("*") if f.is_file()]
 
 
-def test_an_item_for_another_bot_is_transcribed_but_not_taken(project, fake_claude, heard):
+def test_an_item_for_another_bot_is_transcribed_but_not_taken(project, fake_claude, heard, monkeypatch):
     p = project(assigned(voiced(), "zombo"), transcribe=WHISPER)
     recorded(p)
     p.play(p.scene(result="Do it."))
+    # While it is transcribed the item is claimed - held against other loops - and still zombo's
+    # (item voice-tweaks).
+    during = []
+    engine = voice.transcribe
+
+    def watched(file, settings):
+        during.append(p.show("voiced"))
+        return engine(file, settings)
+
+    monkeypatch.setattr(voice, "transcribe", watched)
     assert p.go() == 0
     assert len(fake_claude.calls()) == 1
     assert "![transcribed]" in body_of(p, "voiced")
+    assert [(s.get("working"), s.get("assignee")) for s in during] == [("true", "zombo")]
+    assert "transcribing" in str(during[0].get("worker"))
     shown = p.show("voiced")
-    assert shown["stage"] == "ready" and not shown.get("working")
+    assert shown["stage"] == "ready" and shown.get("working") != "true" and shown["assignee"] == "zombo"
     assert len(voice_records(p, "voiced")) == 1
+    assert not p.r.claimed
+
+
+def test_an_item_another_loop_has_claimed_is_left_to_it(project, fake_claude, heard):
+    """An item already marked as being worked is neither transcribed nor counted a failure: it is
+    transcribed once it is free (item voice-tweaks)."""
+    from test_claims import with_fields
+    p = project(with_fields(voiced(), "voiced", "- working = true"), transcribe=WHISPER)
+    recorded(p)
+    assert p.go() == 0
+    assert fake_claude.calls() == [] and heard[0] == []
+    assert f"![]({SOUND})" in body_of(p, "voiced")
+    assert p.show("voiced").get("working") == "true"
+    assert not p.r.status.get("voiceProblem")
+    assert not [line for line in p.lines if "could not be transcribed" in line]
 
 
 def test_a_failed_transcription_is_said_once_and_the_loop_goes_on(project, fake_claude, heard):
@@ -145,6 +172,9 @@ def test_with_transcription_off_unheard_items_stay_held(project, fake_claude, he
     assert fake_claude.calls() == [] and heard[0] == []
     assert f"![]({SOUND})" in body_of(p, "voiced")
     assert p.r.status["transcribe"] is False and p.r.status["unheard"] == 1
+    # Not an error: the item is only not free to take yet (item voice-tweaks).
+    assert not p.r.status.get("voiceProblem")
+    assert not [line for line in p.lines if "could not be transcribed" in line]
 
 
 def test_an_english_message_is_written_alone(project, fake_claude, heard):
@@ -177,17 +207,6 @@ def test_a_one_turn_command_line():
                                 resume=False, one_turn=True)
     assert argv == ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", "sonnet",
                     "--tools", "", "--max-turns", "1", "--session-id", "sid", "--effort", "medium"]
-
-
-@pytest.mark.parametrize("heard, english", [
-    ({"language": "en", "text": "привет"}, True),
-    ({"language": "russian", "text": "fix it"}, False),
-    ({"language": "", "text": "fix the thing, please"}, True),
-    ({"language": "", "text": "почини <#voice-loop> пожалуйста"}, False),
-    ({"language": "", "text": ""}, True),
-])
-def test_which_messages_are_english(heard, english):
-    assert voice.is_english(heard) is english
 
 
 def test_the_prompt_holds_what_the_speaker_had_before_them():

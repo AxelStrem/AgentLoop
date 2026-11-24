@@ -59,6 +59,31 @@ def test_a_claim_is_the_templates_button_refused_while_it_is_held(overseer, clea
     tracker(doc, "release", "alpha")
 
 
+def test_a_hold_only_claim_leaves_who_it_is_for_alone(overseer, clean_env):
+    """What a loop transcribing an item presses (item voice-tweaks): the item held against other
+    loops whoever it is for, and given to no one."""
+    from test_tracker_assignee import assigned
+    doc = overseer.document(tracker_text(assigned(item("theirs", "ready", complexity="low"), "zombo"),
+                                         item("open", "ready", complexity="low")))
+    tracker = overseer.tracker
+    show = lambda handle: json.loads(tracker(doc, "show", handle, "--json").stdout)
+
+    # Without it, an item for another account is refused before the press.
+    assert json.loads(tracker(doc, "claim", "theirs").stdout)["refused"] == "it is for zombo"
+    assert json.loads(tracker(doc, "claim", "theirs", "--hold-only").stdout) == {"handle": "theirs", "claimed": True}
+    assert show("theirs").get("working") == "true" and show("theirs")["assignee"] == "zombo"
+    # Held, it is refused to a hold-only claim as to any other.
+    assert json.loads(tracker(doc, "claim", "theirs", "--hold-only").stdout)["refused"] == "another agent is working on it"
+    tracker(doc, "release", "theirs")
+    assert show("theirs")["assignee"] == "zombo" and show("theirs").get("working") != "true"
+
+    # An item for no one stays for no one.
+    assert json.loads(tracker(doc, "claim", "open", "--hold-only", "--worker", "transcribing").stdout)["claimed"] is True
+    assert not show("open").get("assignee")
+    tracker(doc, "release", "open")
+    assert not show("open").get("assignee") and show("open").get("working") != "true"
+
+
 def test_a_claim_names_its_worker_and_a_release_takes_it_out(overseer, clean_env):
     doc = overseer.document(tracker_text(item("alpha", "ready", complexity="low"), item("beta")))
     tracker = overseer.tracker
