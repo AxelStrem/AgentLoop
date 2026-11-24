@@ -10,6 +10,7 @@
 # The release workflow writes the release's version over the placeholder below. Beside it:
 #   AGENTLOOP_WHEEL     a wheel's path or address to install instead of the release's
 #   AGENTLOOP_NO_SERVE  set: install, but do not start the page
+#   AGENTLOOP_LOGIN_START  yes: start the page at login without asking; no: neither ask nor start it
 #   UV_NO_MODIFY_PATH   set: change no shell profile, neither uv's installer nor this script
 
 set -eu
@@ -45,6 +46,35 @@ find_uv() {
     try_uv "$HOME/.local/bin/uv" && return 0
     try_uv "$HOME/.cargo/bin/uv" && return 0
     return 1
+}
+
+# Starting the page at login brings back, after a restart, the loops nobody ended (item
+# loginstart). Asked once: a login start already there is left as it is, since it may run a build
+# rather than this install. Under `curl | sh` the script is standard input, so the answer is read
+# from the terminal; with none, nothing is asked.
+offer_login_start() {
+    found=0
+    "$1" login-start status >/dev/null 2>&1 || found=$?
+    case $found in
+        0) say "the page starts at login already: 'agentloop login-start off' stops that."; return 0 ;;
+        1) ;;
+        *) return 0 ;;
+    esac
+    answer="${AGENTLOOP_LOGIN_START:-}"
+    if [ -z "$answer" ]; then
+        if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+            printf 'agentloop: Start the page at login, so loops with Auto start come back after a restart? [Y/n] '
+            read -r answer </dev/tty || answer=no
+            [ -n "$answer" ] || answer=yes
+        else
+            say "to start the page at login, so that loops with Auto start come back after a restart: agentloop login-start on"
+            return 0
+        fi
+    fi
+    case $answer in
+        [Yy]|[Yy][Ee][Ss]|1|true|on)
+            "$1" login-start on || say "the page could not be set to start at login: see above." ;;
+    esac
 }
 
 # The script is all functions until its last line, so that a download cut short under `curl | sh`
@@ -104,6 +134,8 @@ main() {
     fi
 
     "$agentloop" --version
+
+    offer_login_start "$agentloop"
 
     if [ -n "${AGENTLOOP_NO_SERVE:-}" ]; then
         exit 0

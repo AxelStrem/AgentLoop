@@ -9,6 +9,7 @@
 # The release workflow writes the release's version over the placeholder below. Beside it:
 #   AGENTLOOP_WHEEL     a wheel's path or address to install instead of the release's
 #   AGENTLOOP_NO_SERVE  set: install, but do not start the page
+#   AGENTLOOP_LOGIN_START  yes: start the page at login without asking; no: neither ask nor start it
 #   UV_NO_MODIFY_PATH   set: change no PATH, neither uv's installer nor this script
 #
 # It runs on Windows PowerShell 5.1 and on PowerShell 7. Under `iex` an `exit` would close the
@@ -94,6 +95,29 @@ function Install-AgentLoop {
 
     & $agentloop --version
     if ($LASTEXITCODE -ne 0) { throw "agentloop: agentloop --version failed (exit $LASTEXITCODE)" }
+
+    # Starting the page at login brings back, after a restart, the loops nobody ended (item
+    # loginstart). Asked once: a login start already there is left as it is, since it may run a
+    # build rather than this install.
+    & $agentloop login-start status *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Say "the page starts at login already: 'agentloop login-start off' stops that."
+    } elseif ($LASTEXITCODE -eq 1) {
+        $answer = $env:AGENTLOOP_LOGIN_START
+        if (-not $answer) {
+            if ([Console]::IsInputRedirected) {
+                $answer = 'no'
+                Say "to start the page at login, so that loops with Auto start come back after a restart: agentloop login-start on"
+            } else {
+                $answer = Read-Host 'agentloop: Start the page at login, so loops with Auto start come back after a restart? [Y/n]'
+                if (-not $answer) { $answer = 'yes' }
+            }
+        }
+        if ($answer -match '^(y|yes|1|true|on)$') {
+            & $agentloop login-start on
+            if ($LASTEXITCODE -ne 0) { Say 'the page could not be set to start at login: see above.' }
+        }
+    }
 
     if ($env:AGENTLOOP_NO_SERVE) { return }
     Say "starting the page: Ctrl+C stops it, and 'agentloop serve --open' starts it again."

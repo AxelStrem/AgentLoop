@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from agentloop import accounts, config, definition, keys, runner, session, setup, usage
+from agentloop import accounts, config, definition, keys, loginstart, runner, session, setup, usage
 from agentloop import loop as loop_mod
 
 HOST = "127.0.0.1"
@@ -558,7 +558,19 @@ class Handler(BaseHTTPRequestHandler):
     def route_loops(self) -> None:
         machine = config.load_machine()
         self._json({"version": version(machine.settings.path),
-                    "loops": [self._loop_dict(machine, found) for found in machine.settings.loops]})
+                    "loops": [self._loop_dict(machine, found) for found in machine.settings.loops],
+                    "loginStart": self._login_start()})
+
+    @staticmethod
+    def _login_start() -> dict:
+        """Whether serve starts at login here (item loginstart), which the note on loops waiting
+        to come back names when it does not; `supported` is false where it cannot, as in a
+        container."""
+        try:
+            found = loginstart.status()
+        except OSError:
+            return {"on": False, "supported": False}
+        return {"on": found.on, "supported": found.unsupported is None}
 
     def route_get_loop(self, name: str) -> None:
         machine, found = self._machine_loop(name)

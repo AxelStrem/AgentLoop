@@ -41,6 +41,11 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--no-restart-loops", action="store_true",
                        help="do not start again, first, the loops nobody ended: those cut off mid-run, by a restart "
                             "or a container stopped, and those with Auto start on that ended on an empty queue")
+    # Given by a login start (item loginstart), which has no terminal to print to.
+    serve.add_argument("--log", type=Path, metavar="FILE", help="write what serve prints to this file, appended")
+    login_start = sub.add_parser("login-start", help="start agentloop serve at login, so that the loops nobody ended come "
+                                                     "back after a restart; status exits 0 when on, 1 when off")
+    login_start.add_argument("action", choices=["on", "off", "status"])
     run = sub.add_parser("run", help="run one loop in the terminal, as run-agent-loop.ps1 does")
     run.add_argument("loop", help="the loop's name, in the settings; add names it after its project")
     run.add_argument("--model", help="every session on this model, at its default effort (model)")
@@ -610,6 +615,26 @@ def _definition(args: argparse.Namespace) -> int:
     return 0
 
 
+# The size past which serve's log is moved aside to <name>.1 as serve starts.
+_LOG_KEEP = 1_000_000
+
+
+def _log_to(path: Path) -> None:
+    """What serve prints goes to `path` from here on, a line at a time: serve started at login has
+    no terminal, and its console on Windows is hidden."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.stat().st_size > _LOG_KEEP:
+            path.replace(path.with_name(path.name + ".1"))
+    except OSError:
+        pass
+    out = open(path, "a", encoding="utf-8", buffering=1, errors="replace")
+    from datetime import datetime
+
+    out.write(f"--- serve started {datetime.now().astimezone().isoformat(timespec='seconds')}\n")
+    sys.stdout = sys.stderr = out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
@@ -643,9 +668,19 @@ def main(argv: list[str] | None = None) -> int:
         return _accounts(args)
     if args.command == "review":
         return _review(args)
+    if args.command == "login-start":
+        from agentloop import loginstart
+
+        return loginstart.run(args.action)
     if args.command == "serve":
         from agentloop import config, server
 
+        if args.log is not None:
+            try:
+                _log_to(args.log)
+            except OSError as error:
+                print(f"agentloop serve: the log could not be opened ({type(error).__name__})", file=sys.stderr)
+                return 2
         try:
             return server.serve(args.port, args.open, args.host, not args.no_restart_loops)
         except config.ConfigError as error:

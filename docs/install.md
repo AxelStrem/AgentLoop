@@ -30,7 +30,8 @@ irm https://github.com/AxelStrem/AgentLoop/releases/latest/download/install.ps1 
 
 The script installs [uv](https://docs.astral.sh/uv/) if it is missing. uv brings its own Python, so
 you need neither Python nor pipx. The script then installs the release's wheel as a uv tool, puts
-`agentloop` on `PATH` for new terminals, and starts `agentloop serve --open`. Ctrl+C stops the page.
+`agentloop` on `PATH` for new terminals, asks whether to start the page at login (see [Starting the
+page at login](#starting-the-page-at-login)), and starts `agentloop serve --open`. Ctrl+C stops the page.
 The script installs nothing else, and it never asks for a key or reads one. For a release other than
 the latest, use `releases/download/v<version>/` in place of `releases/latest/download/`.
 
@@ -74,6 +75,42 @@ You start with none. Then:
 
 The README's "Being handed a project" says each step in full. `agentloop run <loop> --dry` checks a
 loop without spending a session.
+
+## Starting the page at login
+
+A loop nobody stopped - cut off by a restart, or with **Auto start** on - is started again when
+`serve` starts. Have `serve` start at login, and the loops come back after a restart without
+anything to open:
+
+```sh
+agentloop login-start on       # start serve at each login, from now on
+agentloop login-start status   # on or off; exits 0 when on, 1 when off
+agentloop login-start off      # no longer; a serve already running goes on
+```
+
+The install script asks once, `[Y/n]`. With no terminal to ask on, it says the command and does
+nothing. Set `AGENTLOOP_LOGIN_START=yes` (or `no`) to answer before it asks, for an unattended
+install. When a login start is there already, the script leaves it as it is.
+
+`on` starts nothing now: it arranges the next login. What it writes, for this user alone and with
+no admin rights:
+
+| | |
+| --- | --- |
+| Windows | `agentloop-serve.vbs` in the Startup folder (`shell:startup`), which starts `serve` with its window hidden |
+| macOS | `~/Library/LaunchAgents/io.github.axelstrem.agentloop.serve.plist` |
+| Linux | `~/.config/systemd/user/agentloop-serve.service`, enabled. Without a systemd user session, as in a container, nothing is written |
+
+It runs the `agentloop` that `on` was run as, by its full path. When that is a build's launcher, it
+runs whichever build is current at login. Run `on` again with another `agentloop` to switch. On macOS
+and Linux, the `PATH` and `AGENTLOOP_HOME` of the terminal that ran `on` are written with it, since
+launchd and systemd would start `serve` with a `PATH` that finds neither git nor claude. Run `on`
+again after changing either one. What `serve` prints goes to `serve.log` in the app's log folder
+(`%LOCALAPPDATA%\agentloop\logs` on Windows, `~/Library/Application Support/agentloop/logs` on
+macOS, `~/.local/state/agentloop/logs` on Linux).
+
+On Linux, a systemd user service starts at login and stops at the last logout, but the loops `serve`
+started go on. To have it start at boot with nobody logged in, run `loginctl enable-linger`.
 
 ## Reaching the page from another machine
 

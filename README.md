@@ -44,7 +44,9 @@ launcher the build makes:
 the browser. The page only answers on this machine, and only to a browser that has the token
 (`docs/install.md` says how to reach it from another machine, as a container needs). A
 loop started from the page is a process of its own: it keeps working when the app is closed, and
-the app finds it again when it next starts.
+the app finds it again when it next starts. `<path>/agentloop login-start on` (`agentloop.cmd` on
+Windows) has the launcher start `serve` at login, so that loops come back after a restart: see
+[docs/install.md](docs/install.md#starting-the-page-at-login).
 
 ## The page
 

@@ -169,6 +169,7 @@ async function readLoops() {
   const data = await api("GET", "/api/loops");
   state.loops = data.loops;
   state.loopsVersion = data.version;
+  state.loginStart = data.loginStart || null;
   renderLoops();
 }
 
@@ -243,7 +244,11 @@ function drawComingBack() {
   if (!back.length) return;
   const names = back.map((l) => l.name).join(", ");
   note.textContent = `${back.length === 1 ? `${names} is` : `${names} are`} waiting to come back: nobody stopped ${back.length === 1 ? "it" : "them"}, ` +
-    `and agentloop serve starts ${back.length === 1 ? "it" : "them"} again when it starts. Start ${back.length === 1 ? "it" : "them"} here, or start serve again.`;
+    `and agentloop serve starts ${back.length === 1 ? "it" : "them"} again when it starts. Start ${back.length === 1 ? "it" : "them"} here, or start serve again.` +
+    // Serve not started at login here, where it could be (item loginstart).
+    (state.loginStart && state.loginStart.supported && !state.loginStart.on
+      ? ` To have ${back.length === 1 ? "it" : "them"} come back after a restart without opening anything, start serve at login: agentloop login-start on.`
+      : "");
 }
 
 function renderLoops() {
