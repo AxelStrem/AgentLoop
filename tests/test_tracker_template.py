@@ -98,10 +98,12 @@ def said(done) -> str:
     return lines[0]
 
 
-def test_a_template_of_a_known_version_is_read(fake_server):
+@pytest.mark.parametrize("version", [1, 2])
+def test_a_template_of_a_known_version_is_read(fake_server, version):
+    # 2 adds the trusted flag (item trusted-item); nothing else tracker.py reads changed.
     documents, run = fake_server
     documents["a/proj.os"] = tracker_answer()
-    documents[TEMPLATE] = {"text": template("int template_version (hidden=true) = 1")}
+    documents[TEMPLATE] = {"text": template(f"int template_version (hidden=true) = {version}")}
     done = run("move", "alpha", "nowhere", "--note", "x")
     # The stages came from the template: the move is refused by its own rule, naming them.
     assert "no stage nowhere; the stages are filed, planning" in said(done)
@@ -113,7 +115,7 @@ def test_a_newer_template_asks_for_a_newer_agentloop(fake_server):
     documents[TEMPLATE] = {"text": template("int template_version (hidden=true) = 7")}
     line = said(run("move", "alpha", "planning", "--note", "x"))
     assert line == ("the server's project template (project_template.os) is version 7; "
-                    "this AgentLoop knows 1: update AgentLoop")
+                    "this AgentLoop knows 1-2: update AgentLoop")
 
 
 def test_an_older_template_asks_for_a_newer_overseer(fake_server):
@@ -122,7 +124,7 @@ def test_an_older_template_asks_for_a_newer_overseer(fake_server):
     documents[TEMPLATE] = {"text": template("int template_version (hidden=true) = 0")}
     line = said(run("move", "alpha", "planning", "--note", "x"))
     assert line == ("the server's project template (project_template.os) is version 0; "
-                    "this AgentLoop knows 1: update the server's Overseer")
+                    "this AgentLoop knows 1-2: update the server's Overseer")
 
 
 def test_a_template_from_before_versions_asks_for_a_newer_overseer(fake_server):
@@ -130,7 +132,7 @@ def test_a_template_from_before_versions_asks_for_a_newer_overseer(fake_server):
     documents["a/proj.os"] = tracker_answer()
     documents[TEMPLATE] = {"text": template(None)}
     line = said(run("move", "alpha", "planning", "--note", "x"))
-    assert "is from before template versions; this AgentLoop knows 1: update the server's Overseer" in line
+    assert "is from before template versions; this AgentLoop knows 1-2: update the server's Overseer" in line
 
 
 def test_a_server_that_names_no_bases_is_too_old(fake_server):

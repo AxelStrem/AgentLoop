@@ -532,6 +532,12 @@ items have no setting here: a worker's weekly limit stands for `-StopAtWeeklyUse
 or `stopAtWeeklyUse` still written in a settings file or a project's definition is accepted and
 ignored.
 
+An item flagged `trusted` - a flag a person sets, in the project template from version 2 - is
+finished by the loop once it reaches `testing` (item trusted-item): right after the session that
+moved it there has its work record written, so the record goes to History with it, and before each
+pick for one that came to `testing` otherwise - moved there by hand, or a parent moved on from
+`parts`. It has no setting: the flag is the choice, item by item. The script has no such flag.
+
 With `autoStart` on (item auto-start, the Auto button in the loop's row), a loop that finds nothing
 to work does not end: it stays alive, `idle`, and asks the tracker what comes next every
 `autoStartMinutes`, which spends no session. It also listens for changes to its tracker on the
