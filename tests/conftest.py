@@ -1,5 +1,7 @@
-"""What every test shares: git without fsmonitor, and failures as GitHub annotations."""
+"""What every test shares: git without fsmonitor, an environment without the machine's own AgentLoop
+settings, this package for the Pythons they start, and failures as GitHub annotations."""
 import os
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +20,42 @@ def _git_without_fsmonitor():
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+
+# What the container image and a loop's session put in the environment, and the code under test
+# reads: AGENTLOOP_OVERSEER_SERVER alone is kept, since the tests read it on purpose.
+_LEAKED = ("AGENTLOOP_HOST", "AGENTLOOP_TOKEN", "AGENTLOOP_HOME", "AGENTLOOP_CODE", "AGENTLOOP_BREW",
+           "AGENTLOOP_TRACKER", "AGENTLOOP_PYTHON")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _environment_of_its_own():
+    """Every test starts without the settings of the machine it runs on. The suite runs inside the
+    container, whose AGENTLOOP_HOST would have a test's page listen on every address, and inside a
+    loop's session, whose OVERSEER_* and AGENT_* name a live tracker. A test that wants one of
+    these sets it itself."""
+    saved = {k: v for k, v in os.environ.items()
+             if k in _LEAKED or k.startswith(("OVERSEER_", "AGENT_"))}
+    for k in saved:
+        del os.environ[k]
+    yield
+    os.environ.update(saved)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _children_import_this_package():
+    """A Python a test starts (`python -m agentloop`) imports the package the tests import. Without
+    an install, pytest's `pythonpath` puts `src` on its own path only, and not on a child's."""
+    import agentloop
+
+    saved = os.environ.get("PYTHONPATH")
+    here = str(Path(agentloop.__file__).resolve().parent.parent)
+    os.environ["PYTHONPATH"] = os.pathsep.join([here, saved] if saved else [here])
+    yield
+    if saved is None:
+        os.environ.pop("PYTHONPATH", None)
+    else:
+        os.environ["PYTHONPATH"] = saved
 
 
 def github_error(title: str, message: str) -> str:

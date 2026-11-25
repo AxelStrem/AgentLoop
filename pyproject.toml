@@ -31,3 +31,6 @@ agentloop = ["tools/*.md", "page/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The suite runs from the repository without an install too: the container's pytest is Homebrew's,
+# on a Python that the package is not installed into.
+pythonpath = ["src"]
