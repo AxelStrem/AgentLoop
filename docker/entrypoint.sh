@@ -4,7 +4,8 @@
 # then runs the command - `agentloop serve --restart-loops` - as that user. Claude Code refuses
 # --dangerously-skip-permissions as root, and what sessions write to the mounted clones must belong
 # to the person, not to root. Started as another user already (`docker run --user`), it does none of
-# this and runs the command as it is.
+# this and runs the command as it is. Either way it first makes sure claude is installed in the
+# volume, as the user (agentloop-ensure-claude, item docker-claude-runtime).
 #
 #   PUID, PGID         the user and group to run as; 99 and 100 when unset. Never 0.
 #   EXTRA_PACKAGES     Debian packages a project needs beyond the image's, installed at each start
@@ -24,6 +25,8 @@
 set -eu
 
 if [ "$(id -u)" != "0" ]; then
+    # A claude that cannot be installed leaves the page running, to report it.
+    agentloop-ensure-claude || true
     exec "$@"
 fi
 
@@ -95,6 +98,10 @@ if [ "${AGENTLOOP_BREW:-}" = "1" ]; then
 fi
 
 as_user() { gosu "$PUID:$PGID" env HOME="$HOME" "$@"; }
+
+# claude lives in the user's home in the volume and updates itself there. One that cannot be
+# installed leaves the page running, to report it, rather than the container restarting over it.
+as_user agentloop-ensure-claude || true
 
 [ -z "${GIT_USER_NAME:-}" ] || as_user git config --global user.name "$GIT_USER_NAME"
 [ -z "${GIT_USER_EMAIL:-}" ] || as_user git config --global user.email "$GIT_USER_EMAIL"

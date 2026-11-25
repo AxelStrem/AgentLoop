@@ -75,9 +75,18 @@ The template is not in Community Applications; adding it by its address is all i
 - **An SSH key** for git goes in `/data/home/.ssh`, mode 600, owned by `PUID`. A GitHub address
   is cloned, fetched and pushed in the form, HTTPS or SSH, the container signs in with: an SSH key,
   `GIT_TOKEN`, or both ([settings.md](settings.md), "HTTPS or SSH").
-- **System packages:** the image has git, `claude` (its native binary, which needs no Node), a
-  compiler and linker (`build-essential`), `pkg-config`, OpenSSL's headers, `curl`, `unzip`, and
-  the libraries headless Chrome needs. It has no Node or npm: a project that needs them lists
+- **claude** is not in the image. The first start installs it as the user into the volume, at
+  `/data/home/.local/bin/claude` (its versions in `/data/home/.local/share/claude`), with
+  Anthropic's native installer, and serve starts once it is done. That needs the network and
+  downloads about 200 MB, once. claude then updates itself there, so it stays current without a
+  new image, and a new image keeps it. A start that finds it there and running installs nothing.
+  A failed install is tried three times, then the log says so and serve starts anyway. Sessions
+  then fail with "claude not found", and the next start tries again. To install it afresh, delete
+  those two folders and restart the container. Started with `--user`, the image installs it in
+  that user's `$HOME/.local`, which is on PATH only when `HOME` is `/data/home`, as the image sets
+  it.
+- **System packages:** the image has git, a compiler and linker (`build-essential`),
+  `pkg-config`, OpenSSL's headers, `curl`, `unzip`, and the libraries headless Chrome needs. It has no Node or npm: a project that needs them lists
   `brew "node"` in its Brewfile.
 - **A project's tools** come from the `Brewfile` in its first repository, installed as the user
   into the Homebrew volume before each session; a session adds to it itself (see
@@ -87,7 +96,8 @@ The template is not in Community Applications; adding it by its address is all i
   Brew's `bin` comes first on PATH, so a brewed `node` or `python3` wins for sessions. Without that
   volume mounted, the log says so at each start, and what brew installed is lost when the container
   is recreated.
-- **Started with `--user`**, the image skips all of the above and runs serve as that user.
+- **Started with `--user`**, the image skips all of the above but the claude install, and runs
+  serve as that user.
 
 ## Signing in to Claude
 

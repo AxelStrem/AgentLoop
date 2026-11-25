@@ -10,7 +10,8 @@
 #
 # The container image (item docker-image, docker/Dockerfile) is built from the same wheel and tried:
 # started with an empty /data and a token, the page must send a visitor to its sign-in, take the
-# token and refuse a wrong one, run as the user 99 and not as root, carry claude but no node (item
+# token and refuse a wrong one, run as the user 99 and not as root, install claude into the volume
+# at its first start and keep it there at the next (item docker-claude-runtime), carry no node (item
 # docker-image-size), install a Brewfile's jq as that user (item brew-tools) and update its shallow
 # Homebrew, and end at once on docker stop.
 # On a tag it is pushed to ghcr.io/<owner>/agentloop as :<version> and :latest, for linux/amd64
@@ -175,12 +176,13 @@ jobs:
           docker run -d --name agentloop-try -e AGENTLOOP_TOKEN="$token" -v "$data:/data" -p 8765:8765 agentloop:try
           page=http://127.0.0.1:8765
           answer() { curl -s -o /dev/null -w '%{http_code}' "$@" || true; }
-          for i in $(seq 60); do
+          # The first start downloads claude into the volume before serve starts.
+          for i in $(seq 300); do
             [ "$(answer "$page/")" = "303" ] && break
             sleep 1
           done
           fail() { echo "image: $*" >&2; docker logs agentloop-try >&2 || true; exit 1; }
-          [ "$(answer "$page/")" = "303" ] || fail "the page did not answer / with a redirect in 60 s"
+          [ "$(answer "$page/")" = "303" ] || fail "the page did not answer / with a redirect in 300 s"
           curl -s -o /dev/null -D - "$page/" | grep -qi '^location: /signin.html' || fail "/ did not send a visitor to the sign-in form"
           [ "$(answer "$page/signin.html")" = "200" ] || fail "the sign-in form was not served"
           body="$(printf '{"token": "%s"}' "$token")"
@@ -199,13 +201,29 @@ jobs:
           docker exec -u 99:100 -e HOME=/data/home agentloop-try sh -c \
             'cd /data/home && echo "brew \"jq\"" > Brewfile && brew bundle install --no-upgrade --file=Brewfile && jq --version' \
             || fail "a Brewfile's jq did not install as the user"
-          # The image carries claude's native binary alone: node belongs in a project's Brewfile.
+          # claude was installed into the volume, not found in the image.
+          found="$(docker exec -u 99:100 -e HOME=/data/home agentloop-try sh -c 'command -v claude')" || true
+          [ "$found" = "/data/home/.local/bin/claude" ] || fail "claude is at '$found', not in the volume's /data/home/.local/bin"
+          docker logs agentloop-try 2>&1 | grep -q "claude .* installed in /data/home/.local" \
+            || fail "the first start did not say it installed claude"
+          # The image has no node: it belongs in a project's Brewfile.
           if docker exec -u 99:100 -e HOME=/data/home agentloop-try sh -c 'command -v node || command -v npm'; then
             fail "the image has node or npm, which it should leave to the Brewfiles"
           fi
           # The Homebrew seed is a shallow clone: it must still update, in the volume.
           docker exec -u 99:100 -e HOME=/data/home agentloop-try brew update --quiet \
             || fail "brew update failed on the shallow Homebrew"
+          # A second start finds claude in the volume and installs nothing.
+          docker restart agentloop-try >/dev/null
+          for i in $(seq 60); do
+            [ "$(answer "$page/")" = "303" ] && break
+            sleep 1
+          done
+          [ "$(answer "$page/")" = "303" ] || fail "the page did not answer again in 60 s after a restart"
+          [ "$(docker logs agentloop-try 2>&1 | grep -c "installing it")" = "1" ] \
+            || fail "the second start installed claude again"
+          docker logs agentloop-try 2>&1 | grep -q "in /data/home/.local, updating itself there" \
+            || fail "the second start did not find claude in the volume"
           # docker stop reaches serve through tini, and serve ends on it rather than being killed
           # after docker's 10 s.
           started="$(date +%s)"
