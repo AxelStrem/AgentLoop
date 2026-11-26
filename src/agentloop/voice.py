@@ -302,7 +302,7 @@ do praise, thanks and comments on work already done, which tell the agents what 
 - Add nothing the speaker did not say: no plan, no suggestion, no answer to their questions, and no guess at what \
 they meant where it is unclear - say that it is unclear.
 - Keep item handles, people's names, file names, commands and code words as they were said, code words in \
-backticks. An item named aloud by its handle is written <#handle>.
+backticks. An item named aloud by its handle is written <#handle>, and a Discussion topic <:handle>.
 - Never write an @ before a name: a mention decides who an item is for, and only the speaker may make one.
 - The engine may have misheard. Put right a word it plainly got wrong where the project, the item or the people \
 below make the right one clear.

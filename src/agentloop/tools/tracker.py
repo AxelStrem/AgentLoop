@@ -105,6 +105,7 @@ release leaves: the item stays that bot's, and only its loops take it again.
 
 A comment names an item as <#handle>, which the page draws as the item's chip; show adds the
 item's title after it - <#handle> (Its title) - so it reads without asking, and leaves code alone.
+A topic of the project's Discussion tab is named <:handle>, and show titles it the same way.
 
 A tracker either writes the whole project out, or inherits the project template - its root
 `<projects/project_template.os/project> project (...) {` holding `- name`, `- description` and the
@@ -1170,21 +1171,40 @@ def stage_and_title(t, handle):
 
 #: An item named in a comment, as the page draws it into a chip: <#handle>, or <#project:handle>.
 MENTION = re.compile(r'<#([^<>\s]+)>')
+#: An item or a Discussion topic named in a comment, as (mark, handle): <#handle> an item, <:handle>
+#: a topic - the template's `topics` vocabulary - each also as project:handle. A topic has a mark
+#: of its own, so the two are told apart by it, though their handles come from one pool.
+MARKED = re.compile(r'<([#:])([^<>\s]+)>')
+
+
+def topic_title(t, handle):
+    """The title of a Discussion topic named here or as project:handle; None if none is. A tracker
+    that has written no Discussion list - no topic yet, or a template older than the tab - has none."""
+    there, own = t.peek(handle)
+    if there is None or there.header('Discussion') is None:
+        return None
+    return next((g.get('title', '') for *_, g in there.entries('Discussion') if g.get('handle') == own), None)
 
 
 def with_titles(t, text):
     """A comment's text with each item it names followed by that item's title -
-    `<#handle> (Its title)` - so whoever reads it knows what is meant without asking, and each
-    image it holds at its full path - see IMAGE. Inside code, fenced or in backticks, both are
-    text and stay as they are, as the page leaves them; so does a handle no item has."""
+    `<#handle> (Its title)` - and each Discussion topic, `<:handle>`, by the topic's, so whoever
+    reads it knows what is meant without asking; and each image it holds at its full path - see
+    IMAGE. Inside code, fenced or in backticks, all are text and stay as they are, as the page
+    leaves them; so does a handle nothing has. Both marks are read in one pass, so a title put in
+    is never read again for a mark of its own."""
     titles = {}
 
     def titled(m):
-        h = m.group(1)
-        if h not in titles:
-            found = stage_and_title(t, h)
-            titles[h] = found[1] if found else None
-        return f'{m.group(0)} ({titles[h]})' if titles[h] else m.group(0)
+        # Keyed by mark and handle: an item and a topic may share a handle, and the mark says which.
+        key = (m.group(1), m.group(2))
+        if key not in titles:
+            if m.group(1) == '#':
+                found = stage_and_title(t, m.group(2))
+                titles[key] = found[1] if found else None
+            else:
+                titles[key] = topic_title(t, m.group(2))
+        return f'{m.group(0)} ({titles[key]})' if titles[key] else m.group(0)
     def located(m):
         target = m.group(2).strip()
         if re.match(r'^[a-z][a-z0-9+.-]*:', target, re.I) or Path(target).is_absolute():
@@ -1192,7 +1212,7 @@ def with_titles(t, text):
         here = fetched_image(t, target)
         return f'![{m.group(1)}]({here.as_posix()})' if here else m.group(0)
     parts = re.split(r'(```.*?```|`[^`\n]*`)', text, flags=re.S)
-    return ''.join(p if i % 2 else IMAGE.sub(located, MENTION.sub(titled, p)) for i, p in enumerate(parts))
+    return ''.join(p if i % 2 else IMAGE.sub(located, MARKED.sub(titled, p)) for i, p in enumerate(parts))
 
 
 #: An image in a comment, as the page pastes one: ![](images/<project>/<name>.png), a path relative

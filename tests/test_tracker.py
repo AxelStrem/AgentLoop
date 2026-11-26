@@ -161,3 +161,33 @@ def test_voice_is_heard_on_a_manual_item_but_not_an_asked_or_testing_one(capsys)
     assert "tried" not in {f["handle"] for _, f in q.free + q.held + q.claimed}
     tracker.next_item(t, Namespace(owner=None, prefer=None))
     assert sorted(json.loads(capsys.readouterr().out)["unheard"]) == ["manual", "plain"]
+
+
+DISCUSSION = """    - Discussion {
+        - {
+            - handle = "naming"
+            - title = "How things are named"
+        }
+        - {
+            - handle = "alpha"
+            - title = "A topic sharing alpha's handle"
+        }
+    }
+"""
+
+
+def test_show_titles_items_and_discussion_topics_by_their_marks():
+    # Item topic-mentions: a topic is named <:handle>, an item <#handle>, and the mark decides
+    # which is meant - so a handle both have takes the title of the one its mark names.
+    server = StubServer()
+    server.texts[DOC] = server.texts[DOC].replace("    - History {\n", DISCUSSION + "    - History {\n", 1)
+    t = tracker.Tracker(DOC, server)
+    text = "See <:naming>, <#alpha>, <:alpha>, <#naming>, <:nowhere> and `<:naming>`."
+    assert tracker.with_titles(t, text) == (
+        "See <:naming> (How things are named), <#alpha> (The alpha item), "
+        "<:alpha> (A topic sharing alpha's handle), <#naming>, <:nowhere> and `<:naming>`.")
+
+
+def test_a_topic_mention_in_a_tracker_with_no_discussion_stays_as_it_is(server):
+    t = tracker.Tracker(DOC, server)
+    assert tracker.with_titles(t, "<:naming> and <#alpha>") == "<:naming> and <#alpha> (The alpha item)"

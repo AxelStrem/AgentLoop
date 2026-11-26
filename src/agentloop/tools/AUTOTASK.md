@@ -242,7 +242,9 @@ one, `Stages`, `Labels` and `Flags` the vocabularies. An open item looks like th
   `$` through a file, `@<path>` (see "This machine"). An item a comment names is written
   `<#handle>`, which the page draws as the item's chip; backticks are for code, and a `<#handle>`
   inside them stays text. Write the handle alone - the title `tracker.py show` puts after it, as
-  `<#handle> (Its title)`, is for you to read, not to copy. The `NEXT:` line and the commands'
+  `<#handle> (Its title)`, is for you to read, not to copy. A topic of the project's Discussion
+  tab is written `<:handle>` instead, with a mark of its own - never `<#handle>`, which is only an
+  item's - and `show` titles it the same way. The `NEXT:` line and the commands'
   arguments take plain handles. An image in a comment - a screenshot the owner pasted - is kept
   with the tracker, `![](images/<project>/<name>.png)`; `tracker.py show` prints it at a path on
   this machine, a copy it fetched into your scratch folder. Open it
