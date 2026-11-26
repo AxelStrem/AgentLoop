@@ -122,3 +122,42 @@ def test_release_lets_go_of_a_claimed_item(server, capsys):
 def test_release_of_a_free_item_writes_nothing(server, capsys):
     tracker.release(tracker.Tracker(DOC, server), Namespace(handle="alpha"))
     assert server.sets == []
+
+
+def _voiced(handle, stage, flags):
+    """An item with a voice message marked for transcription, at that stage and flagged so."""
+    return f"""        - {{
+            - added = "2026-10-01T00:00:00+00:00"
+            - handle = "{handle}"
+            - title = "The {handle} item"
+            - stage = "{stage}"
+            - flags = "{flags}"
+            div Talk {{
+                list Comments {{
+                    - {{
+                        - at = "2026-10-02T00:00:00+00:00"
+                        - author = "owner"
+                        - body = "![transcribe](sounds/proj/2026-10-02.webm)"
+                    }}
+                }}
+            }}
+        }}
+"""
+
+
+def test_voice_is_heard_on_a_manual_item_but_not_an_asked_or_testing_one(capsys):
+    # Item voice-held-stages: what a person said on an item for a person to work is transcribed;
+    # one waiting on the person's own answer, or at testing, waits until it is back.
+    server = StubServer()
+    server.people = lambda t: []  # the fixture's gamma has an assignee, so the queue asks who is who
+    items = (_voiced("manual", "planning", "manual") + _voiced("asked", "planning", "asked") +
+             _voiced("both", "filed", "manual, asked") + _voiced("tried", "testing", "") +
+             _voiced("plain", "ready", ""))
+    server.texts[DOC] = server.texts[DOC].replace("    - Items {\n", "    - Items {\n" + items, 1)
+    t = tracker.Tracker(DOC, server)
+    q = tracker.Queue(t)
+    assert sorted(f["handle"] for _, f in q.unheard) == ["manual", "plain"]
+    assert {"asked", "both"} <= {f["handle"] for _, f in q.held}
+    assert "tried" not in {f["handle"] for _, f in q.free + q.held + q.claimed}
+    tracker.next_item(t, Namespace(owner=None, prefer=None))
+    assert sorted(json.loads(capsys.readouterr().out)["unheard"]) == ["manual", "plain"]

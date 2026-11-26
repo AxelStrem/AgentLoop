@@ -69,11 +69,13 @@
 A sound in a comment marked for transcription - ![transcribe](sounds/<doc>/<time>.webm), the
 page's box ticked on its player, as it is on a recording made there - holds its item back until
 it is transcribed: queue lists the item as unheard and next names it in `unheard`, whoever it is
-for, since what was said is not known until it is heard. A sound with any other alt text - an
-audio file dropped in, ![](...) - is not an instruction and holds nothing. A transcribed sound is
-![transcribed](...), its transcript quoted on the lines under it; heard writes both, and is the
-one command that changes a comment already made - only to add that, on an item at any stage. A
-loop transcribing an item claims it with --hold-only first, and leaves alone one claimed already.
+for, since what was said is not known until it is heard - on an item at ready, planning or filed,
+flagged manual or not, but not on one flagged asked, nor at testing, later or parts. A sound with
+any other alt text - an audio file dropped in, ![](...) - is not an instruction and holds nothing.
+A transcribed sound is ![transcribed](...), its transcript quoted on the lines under it; heard
+writes both, and is the one command that changes a comment already made - only to add that, on an
+item at any stage. A loop transcribing an item claims it with --hold-only first, and leaves alone
+one claimed already.
 
 An item's conversation is a list of comments, each dated and signed: AGENT_AUTHOR signs what this
 adds - the loop sets it to the model and effort of the session - and 'agent' when nothing does.
@@ -983,8 +985,9 @@ class Queue:
     name, for saying who an item is held for.
 
     An item with a sound in its conversation marked for transcription (REQUESTED) is none of these
-    either, whoever it is for: it is `unheard`, held until a loop has written the transcript under
-    the sound."""
+    either, whoever it is for and flagged manual or not: it is `unheard`, held until a loop has
+    written the transcript under the sound. One flagged asked stays `held`, and one at testing,
+    later or parts is not in the queue at all: their sounds wait until the item is back."""
 
     def __init__(self, t, owner=None):
         self.owner = owner
@@ -1016,10 +1019,13 @@ class Queue:
             for f in sorted(self.by_stage.get(stage, []), key=order):
                 if claimed(f):
                     self.claimed.append((stage, f))
+                elif id(f) in deaf and held(f) in ([], ['manual']):
+                    # One for a person to work is heard all the same, so that what they said is on
+                    # the page; transcribing moves nothing, and it is held again once heard. One
+                    # flagged asked waits for the person's own answer (item voice-held-stages).
+                    self.unheard.append((stage, f))
                 elif held(f):
                     self.held.append((stage, f))
-                elif id(f) in deaf:
-                    self.unheard.append((stage, f))
                 elif waits := waiting_on(t, f, items):
                     self.waiting.append((stage, f, waits))
                 elif (named := named_by[id(f)]) and self.me not in named:
