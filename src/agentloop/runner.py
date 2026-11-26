@@ -238,7 +238,10 @@ def comes_back(settings: config.Settings, found: config.Loop, files: _Files, sai
     if said.get("killed"):
         return None
     why = COME_BACK_AFTER.get(str(said.get("endedBy")))
-    if why and config.effective_settings(settings.defaults, found.settings).get("autoStart"):
+    # A loop that only transcribes waits whatever Auto start says, so it comes back as one in Auto
+    # start does (item transcribe-only).
+    effective = config.effective_settings(settings.defaults, found.settings)
+    if why and (effective.get("autoStart") or effective.get("transcribeOnly")):
         return why
     return None
 

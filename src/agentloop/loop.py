@@ -81,6 +81,11 @@ Differences from the script, each deliberate:
   work record of kind `voice`. The item is claimed while it is transcribed and let go of after,
   without being made this loop's account's; one claimed already is left alone (item voice-tweaks).
   Nothing is moved or committed. The script has no voice messages.
+- With the run setting `transcribeOnly` on, a loop only transcribes (item transcribe-only): it
+  never takes an item into work, runs a session or commits, and runs no setup or Brewfile, since it
+  never touches its repositories - so it may share them with another loop of the project. It waits
+  as `_idle` does, whatever `autoStart` says, transcribing at each look, until a stop or a kill,
+  and takes no seat on the bench (`_transcribe_only`). It refuses to start with `transcribe` off.
 - A loop waiting for work in its idle wait takes a seat on its tracker's bench, `project/Bench`,
   and gives it up as the wait ends, for the page to show who is waiting (item projbench,
   `tracker.py bench`). The seat is `<account>@<machine>/<loop>`; a run gives up its own once as it
@@ -125,6 +130,14 @@ UPDATE_SECONDS = 60
 
 class LoopError(Exception):
     """A loop that cannot start: its project, its worker or its repositories are not as they must be."""
+
+
+def check_transcribe_only(name: str, settings: dict) -> None:
+    """Refuses a loop set to only transcribe whose transcribe setting is off: it would have nothing
+    to do at all (item transcribe-only)."""
+    if settings.get("transcribeOnly") and str((settings.get("transcribe") or {}).get("engine") or "off") == "off":
+        raise LoopError(f"The loop {name} is set to only transcribe, but its transcribe setting is off: "
+                        "name an engine, or turn transcribeOnly off.")
 
 
 # Small things the script does inline
@@ -563,6 +576,7 @@ class Run:
         self.overrides = {name: value for name, value in (overrides or {}).items() if value is not None}
         self.settings = config.loop_settings(machine, loop, project)
         self.settings.update(self.overrides)
+        check_transcribe_only(loop.name, self.settings)
         try:
             config.check_system(project)
             placed = config.place_repos(loop, project)
@@ -1353,6 +1367,18 @@ class Run:
     def transcribing(self) -> bool:
         return str((self._s("transcribe") or {}).get("engine") or "off") != "off"
 
+    def transcribe_only(self) -> bool:
+        """Whether this loop only transcribes (item transcribe-only)."""
+        return bool(self.settings.get("transcribeOnly"))
+
+    def _other_transcribes_only(self, other) -> bool:
+        # The other loop's settings as this machine's file gives them, without its project's
+        # definition, which is not read for this.
+        try:
+            return bool(config.loop_settings(self.machine, other).get("transcribeOnly"))
+        except config.ConfigError:
+            return False
+
     def hear(self, answer: dict | None) -> dict | None:
         """next's answer, once the voice messages of the items it names as unheard are transcribed
         - asked again after them, so that the items they held are free to take. With transcription
@@ -1562,7 +1588,7 @@ class Run:
             self._status(loop=self.loop.name, project=self.project, worker=self.worker.name, state="running", pid=os.getpid(),
                          started=self._now(), item=None, title=None, kind=None, session=None, cost=0.0,
                          usage=None, until=None, limit=None, ended=None, exit=None, killed=False, error=None,
-                         transcribe=self.transcribing(), unheard=0, voiceProblem=None,
+                         transcribe=self.transcribing(), transcribeOnly=self.transcribe_only(), unheard=0, voiceProblem=None,
                          leftFiles=None, heldFor=None)
             code = 1
             error = None
@@ -1596,6 +1622,10 @@ class Run:
             other = self.machine.settings.loop(name)
             if other is None:
                 continue
+            # A loop that only transcribes never writes to its repositories, so it shares them
+            # freely - whichever of the two it is (item transcribe-only).
+            if self.transcribe_only() or self._other_transcribes_only(other):
+                continue
             shared = [top for top in config.tops(other, self.project_def) if top in self.repos]
             if shared:
                 raise LoopError(f"The loop {name} is working {self.project} in {_slashes(shared[0])}, as this one would: "
@@ -1607,6 +1637,13 @@ class Run:
             return self._setup_alone()
         self.say(f" Starting the agent loop on {self.project}. To stop it once the item at work is done, make the file {self.stop_file} - or at once, {self.kill_file}", "Cyan")
         self.say(f" {build.describe()}", "DarkGray")
+        if self.transcribe_only():
+            status = self._transcribe_only()
+            if self.moving_to and status == 0:
+                self._hand_over()
+            self.say("Loop finished; it only transcribed.", "Green")
+            self.usage_line()
+            return status
         status = 0
         while True:
             # The script's mutex, had again once the loop of the project that had it has ended.
@@ -1873,6 +1910,72 @@ class Run:
             self._status(watching=False)
             # Off the bench however the wait ends: work found, a stop, a kill, the toggle, an error.
             self.bench("leave")
+
+    def _transcribe_only(self) -> int:
+        """The run of a loop that only transcribes (item transcribe-only): `hear` at once, and then
+        as `_idle` looks - every `autoStartMinutes`, and once the tracker has changed and settled -
+        whatever `autoStart` says, until a stop or a kill, or a newer build to move to. What `next`
+        offers is never taken: no item is planned, claimed for work or committed, and nothing in the
+        repositories is touched, so no setup script, Brewfile or definition to accept is waited on.
+        It takes no seat on the bench, which says who waits for work. A worker's limits still hold
+        it, since each transcript's clean-up call is on the voice route. 0 however it ends; a look
+        that fails is tried again at the next."""
+        self.say(f" Transcribing only: voice messages on {self.project}'s items are transcribed as they come, "
+                 f"and no item is taken into work. Looking every {figure(self._s('autoStartMinutes'))} minutes, "
+                 "and as the tracker changes.", "Cyan")
+        self._status(item=None, title=None, kind=None, session=None, watching=False)
+        # A seat a run of this loop left in a wait for work, before it was set to only transcribe.
+        self._clear_seat()
+        heard: list[str] = []
+        watcher = self._watcher(heard.append)
+        look_at = self.clock.now()
+        failing = False
+        looked, counted, since = 0, 0, self.clock.now()
+        try:
+            while True:
+                if self.kill_file.exists():
+                    remove(self.kill_file)
+                    self.ended_by = "kill"
+                    self.say("Stopped at once, as asked.", "Yellow")
+                    return 0
+                if self.stop_file.exists():
+                    remove(self.stop_file)
+                    self.ended_by = "stop"
+                    self.say("Stopping as asked.", "Green")
+                    return 0
+                if self.update_looked is None or self.clock.now() - self.update_looked >= UPDATE_SECONDS:
+                    self.update_looked = self.clock.now()
+                    if self._move_to_newer():
+                        return 0
+                while heard:
+                    self.say(heard.pop(0), "DarkYellow")
+                if bool(self.status.get("watching")) != watcher.watching:
+                    self._status(watching=watcher.watching)
+                if watcher.changes != counted:
+                    counted, since = watcher.changes, self.clock.now()
+                if counted != looked and self.clock.now() - since >= SETTLE_SECONDS:
+                    look_at = self.clock.now()
+                if self.clock.now() >= look_at:
+                    looked = counted
+                    if self.lock:
+                        self.lock.retake()
+                    self._pause()
+                    if self.ended_by in ("stop", "kill"):
+                        # Asked while paused at a worker's limit.
+                        return 0
+                    self._status(state="running", until=None)
+                    answer = self.hear(self.read_next())
+                    if not answer and not failing:
+                        self.say("tracker.py could not say what waits to be transcribed. Trying again at the next look.", "DarkYellow")
+                    failing = not answer
+                    look_at = self.clock.now() + float(self._s("autoStartMinutes")) * 60
+                    self._status(state="idle", until=datetime.fromtimestamp(look_at).astimezone().isoformat(timespec="seconds"),
+                                 limit=None)
+                self.clock.sleep(usage.POLL_SECONDS)
+        finally:
+            watcher.stop()
+            self.watcher = None
+            self._status(watching=False)
 
     def seat(self) -> str:
         """The loop's seat on the bench, as `tracker.py bench --loop` takes it: the machine and the

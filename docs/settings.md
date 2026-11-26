@@ -523,6 +523,7 @@ One set of keys, wherever they are written:
 | `leftSessions` | `3` | none: see "Files left uncommitted" |
 | `leftHours` | `24` | none |
 | `transcribe` | `{"engine": "off"}`; or `"whisper"` or `"openai"`, with that engine's own keys | none: see [voice.md](voice.md) |
+| `transcribeOnly` | `false`; `true` only transcribes, never taking an item into work. Needs `transcribe` on. Not in a project's settings | none: see [voice.md](voice.md) |
 
 A route is `{"model": "opus", "effort": "medium"}`. The `voice` route is not a session's: it is the
 one-turn call that cleans up a voice message's transcript (see [voice.md](voice.md)).

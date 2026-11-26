@@ -53,6 +53,17 @@ With `transcribe` off, the default, a loop never transcribes. Unheard items stay
 loop on another machine to transcribe. The page's row for the loop then says how many items wait,
 and that transcription is off on it.
 
+### A loop that only transcribes
+
+A loop that transcribes takes the next item once it is done, and that may be the item it has just
+transcribed, when no one is in its `for` column. With `transcribeOnly` on, a loop only transcribes:
+it never takes an item into work, runs a session or commits. It waits as an idle loop does, looking
+every `autoStartMinutes` and as the tracker changes, whatever `autoStart` says, and transcribes what
+it finds, on items for any account, until it is stopped. It runs no setup script and takes no seat
+on the bench, since it never takes work. It never writes to its repositories, so it may share them
+with a working loop of the same project. A loop with `transcribeOnly` on and `transcribe` off
+refuses to start.
+
 ## Local Whisper
 
 Whisper runs through [faster-whisper](https://github.com/SYSTRAN/faster-whisper) in a Python

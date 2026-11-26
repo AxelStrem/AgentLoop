@@ -58,6 +58,7 @@ def test_settings_layer_over_each_other():
     (lambda s: s["workers"][0].update(limits={"five_hour": 80}), "workers[0].limits.five_hour"),
     (lambda s: s["defaults"].update(leftSessions=0), "defaults.leftSessions"),
     (lambda s: s["defaults"].update(leftHours=-1), "defaults.leftHours"),
+    (lambda s: s["loops"][1]["settings"].update(transcribeOnly="yes"), "loops[1].settings.transcribeOnly"),
 ])
 def test_wrong_settings_are_refused_where_they_are(tmp_path, change, where):
     raw = _example_settings()
@@ -86,6 +87,8 @@ def test_not_json_names_the_line(tmp_path):
     ({"repos": []}, "repos"),
     ({"repos": ["X"]}, "repos[0]"),
     ({"systems": ["windows", "beos"]}, "systems"),
+    # Whether a loop only transcribes is each machine's to say, never a project's.
+    ({"settings": {"transcribeOnly": True}}, "settings.transcribeOnly"),
 ])
 def test_wrong_projects_are_refused_where_they_are(changes, where):
     with pytest.raises(ConfigError) as error:

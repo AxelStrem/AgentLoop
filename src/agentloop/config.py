@@ -77,6 +77,10 @@ DEFAULTS: dict[str, Any] = {
     # that turns a recording in a comment into text before the loop takes an item, with that
     # engine's own keys (voice.py). "off" never transcribes, and leaves such items held.
     "transcribe": {"engine": "off"},
+    # Not the script's (item transcribe-only): a loop that only transcribes those voice messages, and
+    # never takes an item into work, runs a session or commits - for an account that can transcribe
+    # beside loops that cannot. It needs transcribe's engine to be one.
+    "transcribeOnly": False,
     # Not the script's, which only prints them (item leftfiles): a file changed before a session
     # and again by it is left uncommitted; once one has been left this many sessions in a row, or
     # this many hours, the loop takes no item until it is committed or stashed.
@@ -260,7 +264,7 @@ def check_run_settings(where: str, field: str, settings: Any) -> None:
         elif key == "transcribe":
             if not isinstance(value, dict) or value.get("engine") not in TRANSCRIBE_ENGINES:
                 raise ConfigError(where, at, '{"engine": ' + " | ".join(f'"{v}"' for v in TRANSCRIBE_ENGINES) + ", ...the engine's own keys}")
-        elif key in ("push", "autoStart"):
+        elif key in ("push", "autoStart", "transcribeOnly"):
             if not isinstance(value, bool):
                 raise ConfigError(where, at, "true or false")
         elif key in ("pushTries", "leftSessions"):
@@ -407,9 +411,10 @@ def check_project(raw: dict, where: str) -> None:
     check_tools(raw.get("tools"), where)
     check_run_settings(where, "settings", raw.get("settings"))
     # Whether a changed definition runs before anyone has looked is for the person running the
-    # loop to say, not for the project that changes it (item doc-change).
+    # loop to say, not for the project that changes it (item doc-change) - and so is whether a
+    # loop only transcribes, which would leave a project with no loop to work it (item transcribe-only).
     if isinstance(raw.get("settings"), dict):
-        for key in ("acceptDefinition", "setup"):
+        for key in ("acceptDefinition", "setup", "transcribeOnly"):
             if key in raw["settings"]:
                 raise ConfigError(where, f"settings.{key}", "is for each machine to set, in its defaults or a loop's settings, not a project")
 
