@@ -76,7 +76,8 @@ Differences from the script, each deliberate:
   is retired here: a worker's weekly limit pauses its loops there instead.
 - With the run setting `transcribe` naming an engine, the voice messages that hold items back are
   transcribed before an item is taken, and in the idle wait as the tracker changes (item
-  voice-loop, `hear`): the engine (voice.py), then a one-turn call with no tools on the `voice`
+  voice-loop, `hear`) - before the build a triage goes on to and the item a session goes on to as
+  well, which take an item without a pick (item voice102): the engine (voice.py), then a one-turn call with no tools on the `voice`
   route makes the text clear English, which `tracker.py heard` writes under the recording, with a
   work record of kind `voice`. The item is claimed while it is transcribed and let go of after,
   without being made this loop's account's; one claimed already is left alone (item voice-tweaks).
@@ -1315,6 +1316,17 @@ class Run:
                 self.say(f"Stopped at once, as asked, after the triage of {item['handle']}. To build it by hand in the same session:", "Yellow")
                 self.say(f"  {self.resume_command(session_id)}", "Yellow")
                 return False
+            # What waits to be transcribed is heard before the build, as before any pick: other
+            # loops may not be able to transcribe, and wait on this one for it (item voice102).
+            # A voice message the item itself was given meanwhile is what was said about it, which
+            # the session has not read: it is heard with the rest, and the item is not built in this
+            # session but offered again by the queue.
+            if self.transcribing():
+                looked = self.read_next()
+                self.hear(looked)
+                if looked and item["handle"] in (looked.get("unheard") or []):
+                    self.say(f"  {item['handle']} was given a voice message during its triage: it is not built in this session.", "DarkYellow")
+                    return True
             self.out("")
             self.say("  build, in the same session", "Cyan")
             asked = self.suggested
@@ -1342,7 +1354,8 @@ class Run:
         elif self._over() is not None:
             why = f"{self.worker.name} is past one of its usage limits"
         if not why:
-            nxt = self.read_next("--prefer", asked)
+            # Heard first, as before any pick (item voice102).
+            nxt = self.hear(self.read_next("--prefer", asked), "--prefer", asked)
             if not nxt or nxt.get("signal") or not nxt.get("preferred"):
                 why = "it is not free to take now"
             elif nxt.get("stage") == "ready" and not nxt.get("discuss") and self.tried(nxt["handle"], route["model"]):
@@ -1379,18 +1392,19 @@ class Run:
         except config.ConfigError:
             return False
 
-    def hear(self, answer: dict | None) -> dict | None:
+    def hear(self, answer: dict | None, *args: str) -> dict | None:
         """next's answer, once the voice messages of the items it names as unheard are transcribed
-        - asked again after them, so that the items they held are free to take. With transcription
-        off they stay held, for a loop that transcribes. An item whose transcription failed is not
-        tried again this run. A round that wrote nothing ends it: what is left cannot be heard now."""
+        - asked again after them, with the same `args`, so that the items they held are free to
+        take. With transcription off they stay held, for a loop that transcribes. An item whose
+        transcription failed is not tried again this run. A round that wrote nothing ends it: what
+        is left cannot be heard now."""
         for _ in range(3):
             if not answer or not self.transcribing():
                 return answer
             waiting = [h for h in answer.get("unheard") or [] if h not in self.unheard_failed]
             if not waiting or not self.transcribe(waiting):
                 return answer
-            answer = self.read_next()
+            answer = self.read_next(*args)
         return answer
 
     def _voice_failed(self, handle: str, why: str) -> None:

@@ -26,7 +26,12 @@ player on the tracker page, which is ticked on a recording made on the page and 
 audio file dropped in; it is written into the comment as `![transcribe](sounds/...)`. A sound
 without it is not an instruction, and holds nothing. Once transcribed the mark reads
 `![transcribed](...)`. A loop whose `transcribe` setting names an engine transcribes them before it takes an
-item, and again while it waits for work with `autoStart` on, once the tracker changes:
+item, and again while it waits for work with `autoStart` on, once the tracker changes. That
+includes an item taken without a pick: the build a triage goes on to in the same session, and the
+item a session asks to go on to. Everything waiting is heard first, for the loops that cannot
+transcribe, and only then is work taken. When the item a triage left ready was itself given a
+voice message meanwhile, that message is heard with the rest, but the item is not built in that
+session, which has not read it; the queue offers it again.
 
 1. `tracker.py sounds --fetch` fetches the recordings into the loop's folder.
 2. The engine turns each one into text, in the language it was spoken in.
