@@ -119,9 +119,11 @@ class LoopStatus:
     # the page shows them by (item assign-bot).
     account: str | None = None
     others: list | None = None
-    # Voice messages (item voice-loop): whether this loop transcribes them, how many items wait for
-    # theirs, and why the last that could not be transcribed was not.
+    # Voice messages (item voice-loop): whether this loop transcribes them, whether it does nothing
+    # else (item transcribe-only), how many items wait for theirs, and why the last that could not
+    # be transcribed was not.
     transcribe: bool | None = None
+    transcribeOnly: bool = False
     unheard: int = 0
     voiceProblem: str | None = None
     # Files left uncommitted, changed before a session and again (item leftfiles), as {repo, path,

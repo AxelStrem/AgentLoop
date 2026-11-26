@@ -1,11 +1,13 @@
 """A loop that only transcribes (item transcribe-only): it hears what waits to be transcribed, at
 once and as the tracker changes, and never takes an item into work, whatever `next` offers. Driven
 on a bare Run whose tracker calls are stubbed, as test_leftfiles drives the hold."""
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from agentloop import colours, config, loop, usage
+from agentloop import colours, config, loop, runner, usage
 
 
 class Clock:
@@ -152,3 +154,16 @@ def test_it_refuses_to_start_with_transcription_off():
 def test_only_the_setting_makes_a_loop_transcribe_only(tmp_path):
     assert bare_run(tmp_path, [{"signal": "empty"}]).transcribe_only()
     assert not (tmp_path / "off").mkdir() or bare_run(tmp_path / "off", [{"signal": "empty"}], transcribeOnly=False).transcribe_only()
+
+
+def test_the_page_is_told_the_loop_only_transcribes(tmp_path, monkeypatch):
+    # The page marks such a loop in its row (item transcribe-only-page), from the status runner
+    # passes on: a field LoopStatus does not name would be dropped on the way.
+    monkeypatch.setenv("AGENTLOOP_HOME", str(tmp_path / "home"))
+    found = SimpleNamespace(project="p", name="l")
+    status = loop.loop_dir("p", "l") / "status.json"
+    status.parent.mkdir(parents=True)
+    status.write_text(json.dumps({"state": "idle", "transcribeOnly": True, "unheard": 2}), encoding="utf-8")
+    with loop.file_lock(loop.lock_path("p", "l")):
+        said = runner.Runner()._status(found).as_dict()
+    assert said["alive"] and said["transcribeOnly"] is True and said["unheard"] == 2

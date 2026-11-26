@@ -28,6 +28,7 @@ const SETTINGS = {
   leftSessions: "Take no item once a file changed before a session and again has been left uncommitted this many sessions in a row.",
   leftHours: "Take no item once such a file has been left uncommitted this many hours.",
   transcribe: "The speech-to-text engine that transcribes voice messages before an item is taken, and its own keys as JSON; off leaves them for a loop that transcribes.",
+  transcribeOnly: "Only transcribe voice messages, for this project's other loops, and never take an item into work; needs transcribe on.",
 };
 const ENGINES = ["off", "whisper", "openai"];
 const COMPLEXITIES = ["trivial", "low", "medium", "high", "unassigned"];
@@ -143,7 +144,7 @@ function valueText(key, value) {
   if (key === "routes") return ROUTE_KEYS.map((k) => `${k} ${routeText(value[k])}`).join(", ");
   if (key === "escalation") return routeText(value);
   if (key === "buildAfterTriage") return value.length ? value.join(", ") : "none";
-  if (key === "push" || key === "autoStart") return value ? "on" : "off";
+  if (key === "push" || key === "autoStart" || key === "transcribeOnly") return value ? "on" : "off";
   if (key === "trial") return `until ${value.until}: ${value.complexity} up to ${value.upTo} points on ${routeText(value.route)}`;
   if (key === "transcribe") {
     const { engine, ...rest } = value;
@@ -287,10 +288,18 @@ function renderLoops() {
     // before it takes an item, unless its transcription is off - then another loop must. That is
     // nothing wrong: the items are only not free to take yet, so it is said plainly
     // rather than as a warning (item voice-tweaks).
+    // A loop that only transcribes (item transcribe-only) takes no item: it is marked, and the
+    // items it holds for their voice messages are the ones it transcribes for the other loops.
+    // A running loop says so itself; one not running is marked by the setting it would start with.
+    const onlyTranscribes = s.alive ? !!s.transcribeOnly : !!(loop.effective || {}).transcribeOnly;
+    if (onlyTranscribes) {
+      stateCell.push(h("span", { class: "chip", title: "Only transcribes voice messages, for this project's other loops, and never takes an item into work", text: "transcribe only" }));
+    }
     if (s.unheard) {
       const off = s.transcribe === false;
       stateCell.push(h("span", { class: "chip",
-        title: off ? "Set transcribe on this loop, or run one that has it, to have them transcribed" : "Transcribed before this loop takes its next item",
+        title: off ? "Set transcribe on this loop, or run one that has it, to have them transcribed"
+          : onlyTranscribes ? "This loop transcribes them, for the project's other loops to take" : "Transcribed before this loop takes its next item",
         text: `${s.unheard === 1 ? "1 item waits for its voice messages" : s.unheard + " items wait for their voice messages"} to be transcribed${off ? " - transcription is off on this loop" : ""}` }));
     }
     // Files changed before a session and again by it, left uncommitted (item leftfiles): named
@@ -892,7 +901,7 @@ function settingRow(key, value, beneath) {
     collect = () => none.checked ? null : {
       until: until.value, complexity: complexity.value, upTo: Number(upTo.value), route: { model: model.value.trim(), effort: effort.value.trim() },
     };
-  } else if (key === "push" || key === "autoStart") {
+  } else if (key === "push" || key === "autoStart" || key === "transcribeOnly") {
     const box = h("input", { type: "checkbox", checked: !!shown });
     inputs = [box];
     control.append(h("label", { class: "group" }, box, key === "push" ? "push" : "on"));
