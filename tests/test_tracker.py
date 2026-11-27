@@ -341,3 +341,100 @@ def test_a_tracker_whose_template_has_neither_list_still_reads(capsys):
     assert tracker.with_titles(t, "<$SEARCH> and <:naming>") == "<$SEARCH> and <:naming>"
     with pytest.raises(SystemExit, match="no item, topic or feature nowhere"):
         tracker.show(t, Namespace(handle="nowhere", json=False, doc=DOC))
+
+
+# Item md-controls-agents: a question asked with controls is answered by a click in it, and the
+# loop takes the asked flag off once everything in it is decided by someone other than its author.
+CHOSEN = "Which way?\n\n- ( ) **A** - by hand\n- (x) **B** - the loop (recommended) <@owner>\n- ( ) **C** - the template\n\nAnything else in words."
+
+
+def _asked(handle, *bodies, flags="asked, auto"):
+    """An item flagged so, whose conversation is `bodies` in order: a loop's comment, signed by the
+    account `agent` with a model as its status, or a person's, as ("owner", body)."""
+    said = ""
+    for body in bodies:
+        author, status = (body[0], "") if isinstance(body, tuple) else ("agent", "opus (medium)")
+        text = body[1] if isinstance(body, tuple) else body
+        said += f"""                    - {{
+                        - at = "2026-10-02T00:00:00+00:00"
+                        - author = "{author}"
+                        - status = "{status}"
+                        - body = {tracker.quoted(text)}
+                    }}
+"""
+    return f"""        - {{
+            - handle = "{handle}"
+            - title = "The {handle} item"
+            - stage = "planning"
+            - flags = "{flags}"
+            div Talk {{
+                list Comments {{
+{said}                }}
+            }}
+        }}
+"""
+
+
+def _with(*items):
+    server = WritingServer()
+    server.people = lambda t: []
+    server.texts[DOC] = server.texts[DOC].replace("    - Items {\n", "    - Items {\n" + "".join(items), 1)
+    return server
+
+
+def test_controls_are_read_as_overseer_draws_them():
+    body = ("- ( ) A\n- (x) B <@owner>\n\ntext\n\n- (x) C <@bob> <@owner>\n  - ( ) nested\n- ( ) D\n"
+            "> - [x] quoted box <@owner>\n- [ ] box\n- (+2) a vote\n```\n- ( ) code\n```\n")
+    selectors, boxes = tracker.controls(body)
+    assert [[(d, w) for d, w, _ in s] for s in selectors] == [
+        [(False, "A"), (True, "B")], [(True, "C"), (False, "D")], [(False, "nested")]]
+    assert selectors[1][0][2] == ["bob", "owner"]
+    assert [(d, w, s) for d, w, s in boxes] == [(True, "quoted box", ["owner"]), (False, "box", [])]
+
+
+@pytest.mark.parametrize("body,answer", [
+    (CHOSEN, [("**B** - the loop (recommended)", ["owner"])]),
+    ("Agree?\n\n- [x] Yes, as recommended <@owner>", [("Yes, as recommended", ["owner"])]),
+    # Signed by the author too: only the others are the answer.
+    ("- [x] Fine <@agent> <@owner>", [("Fine", ["owner"])]),
+])
+def test_a_decided_question_is_an_answer(body, answer):
+    assert tracker.click_answer({"author": "agent", "body": body}) == answer
+
+
+@pytest.mark.parametrize("body", [
+    "No controls at all, only - (x) words.",
+    CHOSEN.replace("- (x) **B** - the loop (recommended) <@owner>", "- ( ) **B**"),  # nothing chosen
+    CHOSEN + "\n\n- [ ] And this?",                                                # a box left
+    "- [x] Ticked as it was written",                                              # signed by no one
+    "- (x) Chosen by its author <@agent>\n- ( ) Other",                            # by the author
+    "- (+3) Only votes",
+])
+def test_an_undecided_question_is_not(body):
+    assert tracker.click_answer({"author": "agent", "body": body}) is None
+
+
+def test_answered_lifts_the_flag_and_says_so(capsys):
+    server = _with(_asked("q1", "An older one.", CHOSEN),
+                   _asked("q2", CHOSEN, ("owner", "I'd rather talk about it.")),  # a person spoke after
+                   _asked("q3", CHOSEN.replace("(x)", "( )")),                     # not answered yet
+                   _asked("q4", CHOSEN, flags="auto"),                             # not asked at all
+                   _asked("q5", "- [x] Box <@owner>", "A later note, no controls."))  # not the last
+    t = tracker.Tracker(DOC, server)
+    tracker.next_item(t, Namespace(owner=None, prefer=None))
+    assert json.loads(capsys.readouterr().out)["answered"] == ["q1"]
+    tracker.answered(tracker.Tracker(DOC, server), Namespace(handles=[]))
+    assert json.loads(capsys.readouterr().out) == {"lifted": ["q1"]}
+    assert server.sets == [(DOC, "project/Items/[q1]/flags", {"String": "auto"})]
+    [(_, address, fields)] = server.appends
+    assert address == "project/Items/[q1]/Talk/Comments"
+    assert "`asked` flag off" in fields["body"]["String"] and "**B** - the loop (recommended) - <@owner>" in fields["body"]["String"]
+    # Signed as a loop's, so the chip it repeats never makes the item the owner's.
+    assert fields["status"]["String"]
+
+
+def test_answered_lifts_only_the_items_named(capsys):
+    server = _with(_asked("q1", CHOSEN), _asked("q2", CHOSEN))
+    tracker.answered(tracker.Tracker(DOC, server), Namespace(handles=["q2"]))
+    assert json.loads(capsys.readouterr().out) == {"lifted": ["q2"]}
+    assert [a for _, a, _ in server.sets] == ["project/Items/[q2]/flags"]

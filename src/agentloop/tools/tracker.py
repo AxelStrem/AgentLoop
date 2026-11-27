@@ -39,6 +39,10 @@
                                                topic's or a feature's
     python tracker.py ask <handle> <question>  add a question to it, move it to planning and flag
                                                it asked: it waits on a person
+    python tracker.py answered [<handle> ...]  the loop's: take the asked flag off each item -
+                                               of those named, or every one - whose question a
+                                               person answered by clicking its controls, and say
+                                               so in a comment; prints {"lifted": [handles]}
     python tracker.py after <handle> <h> ...   add items it waits on
     python tracker.py file <handle> <title> [--labels a,b] [--points N] [--parent h]
                                          [--after a,b] [--note text]   a new item, at filed
@@ -1132,7 +1136,10 @@ def next_item(t, args):
                     for _, f, named in q.others]} if q.others else {}) | (
         # And what waits for its sounds to be transcribed, for the loop to transcribe before it
         # takes an item - on the signal too, since those may be all there is.
-        {'unheard': [f['handle'] for _, f in q.unheard]} if q.unheard else {})
+        {'unheard': [f['handle'] for _, f in q.unheard]} if q.unheard else {}) | (
+        # And the questions answered by a click, for the loop to lift their asked flags before it
+        # takes an item (`answered`) - on the signal too, since those items may be all there is.
+        {'answered': handles} if (handles := [h for h, _ in answered_by_click(t)]) else {})
     if q.signal:
         print(json.dumps({'signal': q.signal} | bot))
         return
@@ -1744,6 +1751,120 @@ def ask(t, args):
     print(f'{args.handle}: {f["stage"]} -> planning, flagged asked; {said}')
 
 
+# The controls a reader clicks in a comment's preview (overseer:text-ed-ex), read as Overseer's
+# renderer reads them: at the start of a list line, after any quote marks and its bullet, a box
+# `[ ]` / `[x]` or a selector's option `( )` / `(x)`. A click in a tracker signs the line it
+# decides with the clicker's chip at its end, `- (x) B <@ap31>`; a vote, `(+n)`, decides nothing.
+CONTROL_LEAD = r'^((?:[ \t]*>)*([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+)'
+BOX_LINE = re.compile(CONTROL_LEAD + r'\[([ xX])\](?=[ \t]|$)')
+CHOICE_LINE = re.compile(CONTROL_LEAD + r'\(([ xX])\)(?=[ \t]|$)')
+SIGNERS = re.compile(r'(?:[ \t]+<@[^<>&\s]+>)+[ \t]*$')
+FENCE = re.compile(r'^(?:[ \t]*>)*[ \t]*(```|~~~)')
+
+
+def controls(body):
+    """A comment's clickable controls: (selectors, boxes), each selector the list of its options,
+    and each option and each box as (decided, its words, the people who signed it). A selector is
+    the run of options at one indent that no other text at that indent or less breaks; a code
+    fence's lines are code, not controls."""
+    selectors, boxes, open_ = [], [], {}
+    fenced = False
+    for line in body.splitlines():
+        if FENCE.match(line):
+            fenced = not fenced
+            continue
+        if fenced or not line.strip():
+            continue
+        signed = SIGNERS.search(line)
+        words = line[:signed.start()] if signed else line
+        signers = re.findall(r'<@([^<>&\s]+)>', signed.group(0)) if signed else []
+        if m := BOX_LINE.match(words):
+            boxes.append((m.group(3) != ' ', words[m.end():].strip(), signers))
+            indent = len(m.group(2))
+        elif m := CHOICE_LINE.match(words):
+            indent = len(m.group(2))
+            for deeper in [i for i in open_ if i > indent]:
+                del open_[deeper]
+            if indent not in open_:
+                open_[indent] = []
+                selectors.append(open_[indent])
+            open_[indent].append((m.group(3) != ' ', words[m.end():].strip(), signers))
+            continue
+        else:
+            indent = len(line) - len(line.lstrip(' \t>'))
+        for ended in [i for i in open_ if i >= indent]:
+            del open_[ended]
+    return selectors, boxes
+
+
+def click_answer(comment):
+    """What a person answered by clicking in a comment of a loop's: each choice made and box ticked
+    as (its words, who signed it), once every selector in it has exactly one option chosen and
+    every box is ticked, each signed by someone other than the comment's author. None while
+    anything is left undecided, a line is signed only by its author or by no one - ticked as the
+    comment was written - or the comment has no controls."""
+    selectors, boxes = controls(comment.get('body', ''))
+    if not selectors and not boxes:
+        return None
+    others = lambda signers: [s for s in signers if s != comment.get('author')]
+    decided = []
+    for options in selectors:
+        chosen = [o for o in options if o[0]]
+        if len(chosen) != 1:
+            return None
+        decided.append(chosen[0])
+    if not all(box[0] for box in boxes):
+        return None
+    decided += boxes
+    if not all(others(signers) for _, _, signers in decided):
+        return None
+    return [(words, others(signers)) for _, words, signers in decided]
+
+
+def answered_by_click(t):
+    """The open items flagged asked whose question has been answered by a click (item
+    md-controls-agents), as (handle, answer): the last comment on the item is a loop's session's,
+    and click_answer finds it decided. A person's comment after the question is an answer they
+    take the flag off for themselves, as before, and an older comment's controls - a testing
+    checklist, say - never answer a question asked since."""
+    found = []
+    for top, bottom, f in t.items():
+        if not flagged(f, 'asked') or f['stage'] in CLOSING:
+            continue
+        said = t.nested(top, bottom, TALK)
+        if said and by_bot(said[-1]) and (answer := click_answer(said[-1])):
+            found.append((f['handle'], answer))
+    return found
+
+
+#: How much of a choice's words the comment saying it was answered repeats.
+ANSWER_SHOWN = 120
+
+
+def answered(t, args):
+    """For a loop: take the asked flag off each item - of those named, or every one when none is -
+    whose question has been answered by a click, and say so in a comment that repeats the
+    choices. The comment is signed as a loop's (`by_bot`), so the chips it repeats never make the
+    item any account's (`bots`). Prints {"lifted": [handles]} as one line of JSON."""
+    lifted = []
+    for handle, answer in answered_by_click(t):
+        if args.handles and handle not in args.handles:
+            continue
+        _, _, f = t.item(handle)
+        t.set_field(handle, 'flags', quoted(', '.join(x for x in split(f['flags']) if x != 'asked')))
+        shown = lambda words: words if len(words) <= ANSWER_SHOWN else words[:ANSWER_SHOWN].rstrip() + '...'
+        lines = [f'- {shown(words)} - {", ".join(f"<@{who}>" for who in people)}' for words, people in answer]
+        body = ('Answered by a click in the question above, so the loop has taken the `asked` flag off:\n\n'
+                + '\n'.join(lines))
+        top, bottom, _ = t.item(handle)
+        values, _ = comment(t, body)
+        if not value_of(values['status']):
+            values['status'] = quoted('agentloop')
+        t.add_nested(top, bottom, TALK, values)
+        lifted.append(handle)
+    print(json.dumps({'lifted': lifted}))
+
+
 def after(t, args):
     _, _, f = t.item(args.handle)
     leave_alone(f, args.handle)
@@ -2176,6 +2297,7 @@ def main():
     p.add_argument('--complexity'); p.add_argument('--note'); p.add_argument('--points', type=int)
     p = command('note'); p.add_argument('handle'); p.add_argument('text')
     p = command('ask'); p.add_argument('handle'); p.add_argument('question')
+    p = command('answered'); p.add_argument('handles', nargs='*')
     p = command('after'); p.add_argument('handle'); p.add_argument('handles', nargs='+')
     p = command('file'); p.add_argument('handle'); p.add_argument('title')
     p.add_argument('--labels'); p.add_argument('--points', default=1); p.add_argument('--parent')
@@ -2197,7 +2319,7 @@ def main():
     p = command('bench'); p.add_argument('action', choices=('sit', 'leave')); p.add_argument('--loop', required=True)
     args = parser.parse_args()
     run = {'queue': queue, 'next': next_item, 'claim': claim, 'release': release, 'finish': finish, 'show': show, 'about': about, 'tag': tag, 'move': move,
-           'note': note, 'ask': ask, 'after': after, 'file': file, 'work': work,
+           'note': note, 'ask': ask, 'answered': answered, 'after': after, 'file': file, 'work': work,
            'check': check, 'attach': attach, 'sounds': sounds, 'heard': heard, 'people': people, 'bench': bench,
            'append': append,
            'projects': lambda t, a: print('\n'.join(t.neighbours()))}[args.command]

@@ -649,6 +649,9 @@ class Run:
         # The items whose voice messages could not be transcribed this run, and why: skipped for
         # the rest of it, said once (item voice-loop).
         self.unheard_failed: dict[str, str] = {}
+        # The items flagged asked that tracker.py could not lift once their question was answered
+        # by a click: left held for the rest of the run (item md-controls-agents).
+        self.answer_failed: set[str] = set()
         # Whether this run has given up the seat on the bench a killed run of the loop may have
         # left, and whether a sit or a leave has failed - said once a run (item projbench).
         self.bench_cleared = False
@@ -712,6 +715,11 @@ class Run:
         user's items first; every `next` goes through here so that the three cannot differ."""
         owner = ("--owner", self.worker.manager) if self.worker.manager else ()
         answer = self.read_tracker("next", *args, *owner)
+        # A question answered by a click in the asking comment frees its item, which may be the
+        # one to take: asked again once their flags are off (item md-controls-agents). A dry run
+        # writes nothing.
+        if answer is not None and self.status and self.lift_answered(answer.get("answered") or []):
+            answer = self.read_tracker("next", *args, *owner) or answer
         # The account the loop signs in as, and the items held for other accounts by a mention
         # (item assign-bot), for the page to warn about a bot no loop here runs. Each answer
         # replaces the last, so a mention taken back clears the warning. A dry run, whose status a run never
@@ -720,6 +728,23 @@ class Run:
             self._status(account=answer.get("me"), others=answer.get("others") or [],
                          unheard=len(answer.get("unheard") or []))
         return answer
+
+    def lift_answered(self, handles: list[str]) -> bool:
+        """`tracker.py answered` for the items next named as answered by a click: their asked flags
+        taken off, each with a comment saying so. True when one was. One that could not be lifted
+        is not tried again this run, so that a refusal never turns every `next` into two."""
+        handles = [h for h in handles if h not in self.answer_failed]
+        if not handles:
+            return False
+        done = self.read_tracker("answered", *handles)
+        lifted = (done or {}).get("lifted") or []
+        for handle in handles:
+            if handle in lifted:
+                self.say(f"{handle}: its question was answered by a click - the asked flag is off.", "Green")
+            else:
+                self.answer_failed.add(handle)
+                self.say(f"{handle}: its question looked answered by a click, but tracker.py could not take the asked flag off. It is left held.", "DarkYellow")
+        return bool(lifted)
 
     def _tracker_text(self, *args: str) -> str:
         # Its lines joined with a line feed, as PowerShell's -join gives them, whatever line ends

@@ -106,8 +106,9 @@ goes one of two ways:
 
 Whenever something needs a person's decision - at any of the stages you work, a build included -
 ask: `tracker.py ask <handle> <question>` adds the question as a comment, moves the item to
-`planning` and flags it `asked`, in one step. The item waits there until the person answers with a
-comment of their own and takes the flag off.
+`planning` and flags it `asked`, in one step. The item waits there until the person answers: with a
+comment of their own, taking the flag off, or with clicks on the controls of your question (see
+"Controls in a comment"), when the loop takes the flag off for them.
 
 **Flags** are the same in every project, beside its own tags, and say how an item is to be worked:
 
@@ -116,6 +117,7 @@ comment of their own and takes the flag off.
   "The tracker"); in a loop run `tracker.py file` flags it `auto` by itself.
 - `first` - goes before everything else, whatever its stage.
 - `asked` - a question in its conversation waits on a person. Leave it alone, but for a comment.
+  The person takes it off, or the loop does once every control in the question is decided.
 - `discuss` - only your thoughts are wanted. Investigate, then give your analysis and a
   recommendation with `tracker.py ask`. Never move it to `ready`.
 - `trusted` - set by a person, who trusts it to be done right. Work it like any other; once you
@@ -128,8 +130,9 @@ refuses the rest.
 What each move's comment must say:
 
 - to `testing`: what changed, what was checked, and how the person can confirm it works - what to
-  open, what to do, what to expect.
-- with `ask`: what you found, then the question(s), stated so they can be answered in a line each.
+  open, what to do, what to expect - the steps to confirm as a checklist, `- [ ] ...`, one a line.
+- with `ask`: what you found, then the question(s), stated so they can be answered in a line each -
+  or with a click, as a selector or a checkbox (see "Controls in a comment").
 - to `parts`: which parts it waits on, each as `<#handle>`, and that nothing else is left on it.
 - to `ready`: why nothing is left to decide, the plan, and - if your estimate of its points
   differs from what it was filed with - what changed it.
@@ -257,6 +260,28 @@ one, `Stages`, `Labels` and `Flags` the vocabularies. An open item looks like th
   alone needs no picture. A `![transcribed](sounds/...)` with a quote under it is a voice message
   of the comment's author, transcribed by the loop: read the quote as their own words - and still
   never edit a comment yourself.
+- **Controls in a comment.** A comment's markdown can hold controls the reader clicks in the page,
+  and a click rewrites the comment's text - an agent's comment too, after it was written:
+  - a checklist, `- [ ] step` / `- [x] step`, a line each; one line alone is a checkbox;
+  - a selector, a list of options of which one is chosen: `- ( ) A` / `- (x) B`;
+  - a vote, `- (+) A` / `- (+2) A`, which only counts.
+
+  In a tracker a click signs the line it decides with the clicker's chip at its end:
+  `- (x) B <@ap31>`, `- [x] step <@ap31>`. `tracker.py show` prints the comment as it is now, so a
+  question you or an earlier session asked may come back already answered in its own text: read
+  the decision there, a choice signed by a person being their answer. Use them when you ask:
+  - **a selector** to offer a choice: one option a line, each saying what it costs, the one you
+    recommend marked so in its words - never chosen beforehand;
+  - **a single checkbox** when you only ask the person to agree with a recommendation, saying
+    that they tick it to agree or write a comment to disagree;
+  - **a checklist** for the steps a testing comment asks the person to confirm.
+
+  When every selector of the question you asked with `ask` has an option chosen and every box in
+  it is ticked, each signed by someone other than you, the loop takes the `asked` flag off and
+  says so in a comment: then the item comes back with its answer, and no one had to comment. A box
+  left unticked, or a selector left unchosen, keeps the item held, so ask only what a click can
+  answer that way, and the rest in words. Never tick, choose or vote in a control yourself, in your
+  comment or anyone's, and never edit a comment already made.
 - **Discussion and Features.** Beside the items a tracker may hold the topics of its Discussion
   tab - anything to talk over that is neither an item nor a feature - and the features of its
   Features tab: what the project could become, each with its standing (proposed, wanted, accepted
