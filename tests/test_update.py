@@ -210,7 +210,7 @@ def bare_run(tmp_path: Path, managed: bool = True) -> loop.Run:
     run._auto_start = lambda: True
     run.bench = lambda action: True
     run._watcher = lambda say: Watcher()
-    run.finish_trusted = lambda now=None: None
+    run.finish_tested = lambda now=None: None
     run.hear = lambda answer: answer
     run.read_next = lambda *args: {"signal": "Nothing to work."}
     return run

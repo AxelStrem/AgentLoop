@@ -438,3 +438,66 @@ def test_answered_lifts_only_the_items_named(capsys):
     tracker.answered(tracker.Tracker(DOC, server), Namespace(handles=["q2"]))
     assert json.loads(capsys.readouterr().out) == {"lifted": ["q2"]}
     assert [a for _, a, _ in server.sets] == ["project/Items/[q2]/flags"]
+
+
+def _flagged_item(handle, stage, flags="", parent=""):
+    lines = [f'            - added = "2026-10-01T00:00:00+00:00"', f'            - handle = "{handle}"',
+             f'            - title = "The {handle} item"', f'            - stage = "{stage}"']
+    if parent:
+        lines.append(f'            - parent = "{parent}"')
+    if flags:
+        lines.append(f'            - flags = "{flags}"')
+    return "        - {\n" + "\n".join(lines) + "\n        }\n"
+
+
+def _finishing_server(version, flags):
+    """The fixtures with a template of that version declaring those flags, and items at testing
+    flagged every way that matters to finishing - and one with an open part."""
+    template = (FIXTURES / "project_template.os").read_text(encoding="utf-8")
+    template = template.replace("template_version (hidden=true) = 2", f"template_version (hidden=true) = {version}")
+    entries = "".join(f'        - {{\n            - tag = "{flag}"\n        }}\n' for flag in flags)
+    template = template.replace("    list Discussion", f'    list Flags (entry=<Label>, key="tag") {{\n{entries}    }}\n'
+                                "    list Discussion", 1)
+    server = StubServer(template)
+    items = (_flagged_item("plain", "testing") + _flagged_item("reviewed", "testing", "review") +
+             _flagged_item("manual", "testing", "manual") + _flagged_item("asked", "testing", "asked") +
+             _flagged_item("trusted", "testing", "trusted") + _flagged_item("readied", "ready") +
+             _flagged_item("whole", "testing") + _flagged_item("piece", "planning", parent="whole"))
+    server.texts[DOC] = server.texts[DOC].replace("    - Items {\n", "    - Items {\n" + items, 1)
+    return server
+
+
+def _finished(server):
+    return [address.split("[")[1].split("]")[0] for _, address, event in server.events if event == "change"]
+
+
+def test_finish_takes_every_item_at_testing_nobody_is_to_check():
+    # Item autoaccept: with review in the template's flags, an item at testing is finished unless it
+    # is flagged review, manual or asked - and not while it has an open part.
+    server = _finishing_server(3, ["manual", "auto", "first", "asked", "discuss", "review"])
+    t = tracker.Tracker(DOC, server)
+    tracker.finish(t, Namespace(handle=None))
+    assert _finished(server) == ["plain", "trusted"]
+    for handle in ["reviewed", "manual", "asked", "readied", "whole"]:
+        with pytest.raises(SystemExit) as refused:
+            tracker.finish(t, Namespace(handle=handle))
+        assert isinstance(refused.value.code, str)
+    tracker.finish(t, Namespace(handle="plain"))
+    assert _finished(server)[-1] == "plain"
+
+
+def test_finish_on_a_template_from_before_review_takes_only_trusted_items():
+    # Item trusted-item, kept for a version-2 template: only an item flagged trusted is finished.
+    server = _finishing_server(2, ["manual", "auto", "first", "asked", "discuss", "trusted"])
+    t = tracker.Tracker(DOC, server)
+    tracker.finish(t, Namespace(handle=None))
+    assert _finished(server) == ["trusted"]
+    with pytest.raises(SystemExit):
+        tracker.finish(t, Namespace(handle="plain"))
+
+
+def test_finish_on_a_template_with_no_flags_list_takes_only_trusted_items():
+    server = _finishing_server(2, [])
+    server.texts[TEMPLATE] = server.texts[TEMPLATE].replace('    list Flags (entry=<Label>, key="tag") {\n    }\n', "")
+    tracker.finish(tracker.Tracker(DOC, server), Namespace(handle=None))
+    assert _finished(server) == ["trusted"]

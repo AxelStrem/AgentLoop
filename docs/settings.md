@@ -551,11 +551,16 @@ a run in the output, and holds nothing up. Only the session's own hunks of such 
 committed: they were written against code that is in no commit, and a commit of them alone may not
 build.
 
-An item flagged `trusted` - a flag a person sets, in the project template from version 2 - is
-finished by the loop once it reaches `testing` (item trusted-item): right after the session that
-moved it there has its work record written, so the record goes to History with it, and before each
-pick for one that came to `testing` otherwise - moved there by hand, or a parent moved on from
-`parts`. It has no setting: the flag is the choice, item by item. The script has no such flag.
+An item is finished by the loop once it reaches `testing` (items trusted-item, autoaccept), unless
+a person is to check it first: it is flagged `review` - a flag a person sets, in the project
+template from version 3 - or `manual` or `asked`, which are a person's already. It is finished
+right after the session that moved it there has its work record written, so the record goes to
+History with it, and before each pick for one that came to `testing` otherwise - moved there by
+hand, or a parent moved on from `parts`. It has no setting: the flag is the choice, item by item.
+On a tracker whose template is from before `review` (version 2, whose flags have `trusted` in its
+place) the loop keeps the rule of then, finishing only an item flagged `trusted`, so that no
+tracker loses its way to keep an item for a person before its template is upgraded. The script
+finishes nothing.
 
 With `autoStart` on (item auto-start, the Auto button in the loop's row), a loop that finds nothing
 to work does not end: it stays alive, `idle`, and asks the tracker what comes next every

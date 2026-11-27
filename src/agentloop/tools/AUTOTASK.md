@@ -87,9 +87,10 @@ command's options. The brief names any tools of the project's own.
 - **filed** - Nothing done yet. If nothing is left to decide, move it straight to `ready`, with the
   plan in the move's comment. If it has to wait for another item first, add that item's handle to its
   `after` list and leave it `filed`. Its own parts it waits on already (see "Waiting").
-- **testing, later** - Waiting on a person. Never process, edit or move these; a comment is all
-  you may add. An item flagged `trusted` does not wait: the loop finishes it as soon as it reaches
-  `testing`, so its testing comment is the last word on it.
+- **testing, later** - No agent's. Never process, edit or move these; a comment is all you may
+  add. An item at `testing` does not wait for a person unless it is flagged `review` (or `manual`
+  or `asked`): the loop finishes it as soon as it reaches `testing`, so its testing comment is the
+  last word on it. An item at `later` waits on a person.
 - **parts** - Nothing is left on the item but its open parts, and it moves to `testing` by itself
   once the last of them is finished or cancelled. Never process, edit or move these; a comment is
   all you may add. `tracker.py` refuses `parts` for an item with no open parts.
@@ -120,17 +121,20 @@ comment of their own, taking the flag off, or with clicks on the controls of you
   The person takes it off, or the loop does once every control in the question is decided.
 - `discuss` - only your thoughts are wanted. Investigate, then give your analysis and a
   recommendation with `tracker.py ask`. Never move it to `ready`.
-- `trusted` - set by a person, who trusts it to be done right. Work it like any other; once you
-  move it to `testing`, the loop finishes it after your session, with no person reading it first,
-  so the testing comment is its record. Anything that needs a person is asked before, not left there.
+- `review` - set by a person, who wants to check it at `testing`. Work it like any other; once you
+  move it to `testing`, it waits there until a person has checked it. An item without it is
+  finished by the loop after the session that moves it to `testing`, with no person reading it
+  first, so its testing comment is its record: anything that needs a person is asked before, not
+  left there.
 
-You set no flag but `auto` and `asked`, and take none off - `trusted` least of all; `tracker.py`
+You set no flag but `auto` and `asked`, and take none off - `review` least of all; `tracker.py`
 refuses the rest.
 
 What each move's comment must say:
 
 - to `testing`: what changed, what was checked, and how the person can confirm it works - what to
   open, what to do, what to expect - the steps to confirm as a checklist, `- [ ] ...`, one a line.
+  Unless the item is flagged `review`, it is finished right after, and this is its record.
 - with `ask`: what you found, then the question(s), stated so they can be answered in a line each -
   or with a click, as a selector or a checkbox (see "Controls in a comment").
 - to `parts`: which parts it waits on, each as `<#handle>`, and that nothing else is left on it.

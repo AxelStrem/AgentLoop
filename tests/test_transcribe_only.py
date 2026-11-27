@@ -86,7 +86,7 @@ def bare_run(tmp_path: Path, answers, clock=None, **settings) -> loop.Run:
     run._move_to_newer = lambda: False
     run._pause = lambda between=True: None
     # What taking an item into work goes through: none of it may be reached.
-    run.plan = run.invoke_item = run.claim = run.finish_trusted = run._setup = run._brew = never
+    run.plan = run.invoke_item = run.claim = run.finish_tested = run._setup = run._brew = never
     return run
 
 

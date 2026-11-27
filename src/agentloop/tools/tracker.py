@@ -18,9 +18,9 @@
                                                it as being worked and nothing more, whoever it
                                                is for: what a loop transcribing it does
     python tracker.py release <handle>         let go of it again
-    python tracker.py finish [<handle>]        finish an item flagged trusted once it is at
-                                               testing, or every such item - the loop's, after
-                                               its work record
+    python tracker.py finish [<handle>]        finish an item at testing nobody is to check
+                                               first - not flagged review, manual or asked - or
+                                               every such item: the loop's, after its work record
     python tracker.py bench sit|leave --loop <machine>/<loop>
                                                take or give up an idle loop's seat on the
                                                tracker's bench, as the key's account
@@ -144,11 +144,13 @@ still unassigned, moving one to parts that has no open parts, and touching Histo
 file --ask, and auto, which file sets by itself when the agent loop runs it (AGENTIC_LOOP is set) -
 an item filed because a person asked for it is not auto.
 
-An item flagged trusted - a person's flag - is one the owner trusts to be done right: once it is at
-testing, the loop finishes it with finish, after the session's work record is written, so that the
-record goes to History with it. finish is the loop's, like claim, release and work: it refuses
-anything but an open item at testing flagged trusted with no open parts, and move still refuses
-finished to everyone.
+An item that reaches testing is finished by the loop with finish, after the session's work record
+is written, so that the record goes to History with it - unless a person is to check it first: it is
+flagged review, a person's flag (the project template from version 3), or manual or asked, which
+are a person's already (item autoaccept). On a template from before review - its Flags without it -
+only an item flagged trusted, the flag review replaced, is finished. finish is the loop's, like
+claim, release and work: it refuses anything else, or an item with open parts, and move still
+refuses finished to everyone.
 """
 import argparse
 import hashlib
@@ -165,7 +167,7 @@ from pathlib import Path
 DEFAULT = os.environ.get('OVERSEER_TRACKER')
 # The versions of the project template this tracker.py reads: its `template_version`, which
 # Overseer raises whenever the stages, complexities, flags or an item's fields change.
-TEMPLATE_VERSIONS = (1, 2)
+TEMPLATE_VERSIONS = (1, 2, 3)
 # How the server names a document of its libraries (overseer:library-source).
 LIBRARY_PREFIX = 'library:'
 
@@ -192,7 +194,11 @@ CLOSING = {'finished', 'cancelled'}
 PRIORITY = ['ready', 'planning', 'filed']
 # The flags that hold an item for a person: no agent takes it, or touches it, while it has one.
 HELD = ['manual', 'asked']
-# The flag of an item the loop finishes once it reaches testing (item trusted-item).
+# The flag of an item a person is to check at testing: the loop finishes every other item that
+# reaches it (item autoaccept), but for those held for a person already (HELD).
+REVIEW = 'review'
+# What a template from before review had instead: the flag of the only items the loop finished
+# (item trusted-item), still read from a tracker whose template has no review flag.
 TRUSTED = 'trusted'
 # The template's complexity: an item with no complexity line has not been judged yet.
 UNASSIGNED = 'unassigned'
@@ -748,6 +754,13 @@ class Tracker:
 
     def labels(self):
         return [e[2].get('tag') for e in self.entries('Labels')]
+
+    def flag_words(self):
+        """The project's flags, as its template declares them - none for a template without a
+        Flags list, rather than stopping as vocabulary would."""
+        if self.header('Flags') is None and not self.declares('Flags'):
+            return []
+        return self.vocabulary('Flags')
 
     def listed(self, name):
         """The entries of a list of the template's that a tracker may have no word of - Discussion,
@@ -2069,13 +2082,20 @@ def work(t, args):
     print(f'{args.handle}: recorded a {args.kind} session on {args.model}')
 
 
-def finishable(t, f):
-    """Why an open item may not be finished by the loop, or None when it may: flagged trusted, at
-    testing, with no open parts."""
-    if not flagged(f, TRUSTED):
+def finishable(t, f, review=None):
+    """Why an open item may not be finished by the loop, or None when it may: at testing, with no
+    open parts, and no person to check it first (item autoaccept) - not flagged review, manual or
+    asked. On a template whose flags have no review, the rule from before it (item trusted-item):
+    only an item flagged trusted. `review` says which, when the caller has read it already."""
+    if review is None:
+        review = REVIEW in t.flag_words()
+    if review:
+        if mine := [flag for flag in [REVIEW, *HELD] if flagged(f, flag)]:
+            return f'{f["handle"]} is flagged {", ".join(mine)} - a person checks it, and finishes it'
+    elif not flagged(f, TRUSTED):
         return f'{f["handle"]} is not flagged {TRUSTED} - only a person finishes it'
     if f['stage'] != 'testing':
-        return f'{f["handle"]} is at {f["stage"]}, not testing - a trusted item is finished once it reaches testing'
+        return f'{f["handle"]} is at {f["stage"]}, not testing - the loop finishes an item once it reaches testing'
     if parts := open_parts(t, f['handle']):
         return f'{f["handle"]} has open parts ({", ".join(parts)}) - it is finished after them'
     return None
@@ -2097,23 +2117,25 @@ def finish_one(t, handle):
 
 
 def finish(t, args):
-    """For the loop: an item flagged trusted, at testing, finished - its stage set to finished, and
-    the template's own `on change` moves it to History, with its conversation and work records, and
-    moves a parent at parts on to testing once it was the last. Only such an item: move refuses
-    finished to an agent, and this is no way around it (item trusted-item).
+    """For the loop: an item at testing that nobody is to check first (finishable), finished - its
+    stage set to finished, and the template's own `on change` moves it to History, with its
+    conversation and work records, and moves a parent at parts on to testing once it was the last.
+    Only such an item: move refuses finished to an agent, and this is no way around it (items
+    trusted-item, autoaccept).
 
-    With no handle, every such item, one line each: finishing a part can bring a trusted parent to
+    With no handle, every such item, one line each: finishing a part can bring its parent to
     testing, so the tracker is read again after each, as an item's address moves once one before it
     has gone to History."""
+    review = REVIEW in t.flag_words()
     if args.handle:
         _, _, f = t.item(args.handle)
-        if why := finishable(t, f):
+        if why := finishable(t, f, review):
             sys.exit(why)
         finish_one(t, args.handle)
         return
     done = set()
     while handle := next((f['handle'] for _, _, f in t.items()
-                          if f['handle'] not in done and finishable(t, f) is None), None):
+                          if f['handle'] not in done and finishable(t, f, review) is None), None):
         finish_one(t, handle)
         done.add(handle)
         t.reload()

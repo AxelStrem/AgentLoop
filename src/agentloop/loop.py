@@ -91,9 +91,10 @@ Differences from the script, each deliberate:
   and gives it up as the wait ends, for the page to show who is waiting (item projbench,
   `tracker.py bench`). The seat is `<account>@<machine>/<loop>`; a run gives up its own once as it
   first reads the tracker, clearing one a killed run left. The script has no bench.
-- An item flagged trusted is finished by the loop once it is at testing (item trusted-item,
-  `finish_trusted`): after the session's work record, and before each pick for one that came to
-  testing otherwise. The script has no trusted flag.
+- An item is finished by the loop once it is at testing (items trusted-item, autoaccept,
+  `finish_tested`), unless a person is to check it first - it is flagged review, manual or asked;
+  on a template from before review, only one flagged trusted: after the session's work record, and
+  before each pick for one that came to testing otherwise. The script finishes nothing.
 - A file a session changed that was changed before it too is left uncommitted, as `Commit-Session`
   leaves it, but not only said in the output (item leftfiles, `keep_left`): it is counted in
   `left.json` beside status.json from session to session, named on the page and in a comment on
@@ -967,23 +968,25 @@ class Run:
             said = (done.stdout + done.stderr).decode("utf-8", errors="replace").strip()
             self.say(f"  The session's record could not be written to the tracker: {said}", "DarkYellow")
 
-    def finish_trusted(self, now: dict | None = None) -> None:
-        """The items flagged trusted that are at testing, finished (item trusted-item): the owner
-        trusts them to be done right, so the testing comment is their record and no person reads it
-        first. Given the item a session has just left - `now` - only when it is such an item; with
-        none, every such item, for one a person moved to testing by hand, or a parent the template
-        moved on from parts. Always after the session's work record, which History keeps with the
-        item but `tracker.py work` cannot reach once it is there. A failure leaves the item at
-        testing, said as a warning. The script has no trusted flag."""
-        if now is not None and (now.get("closed") or now.get("stage") != "testing" or "trusted" not in _flags(now)):
+    def finish_tested(self, now: dict | None = None) -> None:
+        """The items at testing that nobody is to check first, finished (items trusted-item,
+        autoaccept): the testing comment is their record. Which those are is `tracker.py finish`'s
+        to say - not flagged review, manual or asked; only those flagged trusted, on a template
+        from before review. Given the item a session has just left - `now` - only when it may be
+        such an item; with none, every such item, for one a person moved to testing by hand, or a
+        parent the template moved on from parts. Always after the session's work record, which
+        History keeps with the item but `tracker.py work` cannot reach once it is there. A failure
+        leaves the item at testing, said as a warning. The script finishes nothing."""
+        if now is not None and (now.get("closed") or now.get("stage") != "testing"
+                                or {"review", "manual", "asked"} & set(_flags(now))):
             return
         done = self._tracker("finish")
         said = done.stdout.decode("utf-8", errors="replace").strip().splitlines()
         for line in said:
-            self.say(f"  {line}, as it is trusted", "Green")
+            self.say(f"  {line}, as nobody is to check it first", "Green")
         if done.returncode != 0:
             why = (done.stderr.decode("utf-8", errors="replace").strip().splitlines() or ["no reason given"])[-1]
-            self.say(f"  A trusted item could not be finished, and is left at testing: {why}", "DarkYellow")
+            self.say(f"  An item at testing could not be finished, and is left there: {why}", "DarkYellow")
 
     def note_outcome(self, item: dict, route: dict, now: dict | None) -> None:
         """What a session that finished did with its item (`Note-Outcome`): counted when it left it
@@ -1218,7 +1221,7 @@ class Run:
         # The item it would go on to, given what it has read: taken up by the loop if it can be.
         self.suggested = lines.next
         self.add_work_record(before, item, kind, route, now)
-        self.finish_trusted(now)
+        self.finish_tested(now)
         done = commits.commit_session(before, message, self.repos)
         for said in done.said:
             self.say("  " + said, "DarkGreen" if said.startswith("committed") else "DarkYellow")
@@ -1725,9 +1728,9 @@ class Run:
             self.say(f" Iteration {self.iteration}...", "Yellow")
             self.say("----------------------------------------", "Yellow")
 
-            # Trusted items at testing are finished first, so that a parent they bring to testing
+            # Items at testing are finished first, so that a parent they bring to testing
             # is too; then voice messages are transcribed, so that the items they held can be taken.
-            self.finish_trusted()
+            self.finish_tested()
             item = self.hear(self.read_next())
             self._clear_seat()
             if not item:
@@ -1932,8 +1935,8 @@ class Run:
                     looked = counted
                     if self.lock:
                         self.lock.retake()
-                    # What changed may be a trusted item a person moved to testing.
-                    self.finish_trusted()
+                    # What changed may be an item a person moved to testing.
+                    self.finish_tested()
                     item = self.hear(self.read_next())
                     if item and not item.get("signal"):
                         self._status(state="running", until=None, watching=False)
