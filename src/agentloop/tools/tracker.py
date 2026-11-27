@@ -26,7 +26,8 @@
                                                tracker's bench, as the key's account
     python tracker.py show <handle> [--json]   one item in full, open or closed: its fields, the
                                                items around it - parent, after, what it holds up,
-                                               parts, siblings - and its conversation
+                                               parts, siblings - and its conversation; or a
+                                               Discussion topic, or a feature, likewise
     python tracker.py about                    the project, as its tracker describes it
     python tracker.py tag [<tag>] [--json]     what the project says about a tag, or which say
                                                anything
@@ -34,7 +35,8 @@
                                                set an open item's stage, how hard it is, how
                                                much work it is, and what the move did
     python tracker.py note <handle> <text>     add a comment to an open item's conversation,
-                                               whatever its stage or flags
+                                               whatever its stage or flags - or to a Discussion
+                                               topic's or a feature's
     python tracker.py ask <handle> <question>  add a question to it, move it to planning and flag
                                                it asked: it waits on a person
     python tracker.py after <handle> <h> ...   add items it waits on
@@ -105,7 +107,10 @@ release leaves: the item stays that bot's, and only its loops take it again.
 
 A comment names an item as <#handle>, which the page draws as the item's chip; show adds the
 item's title after it - <#handle> (Its title) - so it reads without asking, and leaves code alone.
-A topic of the project's Discussion tab is named <:handle>, and show titles it the same way.
+A topic of the project's Discussion tab is named <:handle>, and a feature of its Features tab
+<$HANDLE>, and show titles each the same way. show and note take a topic's or a feature's handle as
+they take an item's, to read it and comment on it; nothing else does, for neither is ever work - no
+stage, flag or after is a topic's or a feature's, and the queue reads only the items.
 
 A tracker either writes the whole project out, or inherits the project template - its root
 `<projects/project_template.os/project> project (...) {` holding `- name`, `- description` and the
@@ -164,6 +169,11 @@ LIBRARY_PREFIX = 'library:'
 # each in the div that folds it away: its conversation, then the agents' work on it.
 ORDER = ['added', 'handle', 'owner', 'assignee', 'title', 'stage', 'parent', 'after', 'labels', 'flags', 'points', 'complexity',
          'pinned', 'working', 'touched_at']
+# A feature's own fields, in the template's order, the texts its Detail fold holds, and what each
+# of its relations - tags of other features' handles - is called on its card.
+FEATURE_ORDER = ['added', 'handle', 'standing', 'title', 'requires', 'incompatible', 'synergies', 'touched_at']
+FEATURE_DETAIL = ['description', 'pros', 'cons']
+FEATURE_RELATIONS = {'requires': 'needs', 'incompatible': 'excludes', 'synergies': 'goes with'}
 TALK = ('Talk', 'Comments', ['at', 'author', 'status', 'body'])
 WORK = ('Agents', 'Work', ['at', 'kind', 'model', 'moved', 'points', 'cost', 'read', 'written', 'output',
                            'turns', 'minutes', 'lines'])
@@ -498,7 +508,7 @@ class Tracker:
 
     def address_at(self, top):
         """The address of the entry whose first line is `top`: `project/Items/[parser]`."""
-        for name in ('Items', 'History', 'Features'):
+        for name in ('Items', 'History', 'Features', 'Discussion'):
             start = self.header(name)
             if start is None:
                 continue
@@ -734,6 +744,31 @@ class Tracker:
 
     def labels(self):
         return [e[2].get('tag') for e in self.entries('Labels')]
+
+    def listed(self, name):
+        """The entries of a list of the template's that a tracker may have no word of - Discussion,
+        Features - as entries does: none where the tracker has not written it, whether or not its
+        template declares it, so that a tracker made before the tab, or holding the whole project
+        without it, still reads - and without reading the template to find out which."""
+        if self.header(name) is None:
+            return []
+        return self.entries(name)
+
+    def topics(self):
+        """The Discussion tab's topics, as (first line, last line, fields)."""
+        return self.listed('Discussion')
+
+    def features(self):
+        """The Features tab's features, as (first line, last line, fields), each with its standing
+        - the template's when it writes none - and the texts of its Detail fold among its fields."""
+        found = []
+        for top, bottom, f in self.listed('Features'):
+            f.setdefault('standing', DEFAULTS['standing'])
+            detail = self.block(top, bottom, 'div Detail')
+            if detail and detail[0] != detail[1]:
+                f.update({k: v for k, v in self.fields(*detail).items() if k in FEATURE_DETAIL})
+            found.append((top, bottom, f))
+        return found
 
     def items(self):
         found = []
@@ -1171,28 +1206,38 @@ def stage_and_title(t, handle):
 
 #: An item named in a comment, as the page draws it into a chip: <#handle>, or <#project:handle>.
 MENTION = re.compile(r'<#([^<>\s]+)>')
-#: An item or a Discussion topic named in a comment, as (mark, handle): <#handle> an item, <:handle>
-#: a topic - the template's `topics` vocabulary - each also as project:handle. A topic has a mark
-#: of its own, so the two are told apart by it, though their handles come from one pool.
-MARKED = re.compile(r'<([#:])([^<>\s]+)>')
+#: An item, a Discussion topic or a feature named in a comment, as (mark, handle): <#handle> an
+#: item, <:handle> a topic, <$HANDLE> a feature - the template's `items`, `topics` and `features`
+#: vocabularies - each also as project:handle. Each has a mark of its own, so they are told apart
+#: by it, though an item's and a topic's handles come from one pool.
+MARKED = re.compile(r'<([#:$])([^<>\s]+)>')
 
 
 def topic_title(t, handle):
     """The title of a Discussion topic named here or as project:handle; None if none is. A tracker
     that has written no Discussion list - no topic yet, or a template older than the tab - has none."""
     there, own = t.peek(handle)
-    if there is None or there.header('Discussion') is None:
+    if there is None:
         return None
-    return next((g.get('title', '') for *_, g in there.entries('Discussion') if g.get('handle') == own), None)
+    return next((g.get('title', '') for *_, g in there.topics() if g.get('handle') == own), None)
+
+
+def feature_title(t, handle):
+    """The title of a feature named here or as project:handle; None if none is. Its handle is in
+    capitals, and matched as written."""
+    there, own = t.peek(handle)
+    if there is None:
+        return None
+    return next((g.get('title', '') for *_, g in there.features() if g.get('handle') == own), None)
 
 
 def with_titles(t, text):
     """A comment's text with each item it names followed by that item's title -
-    `<#handle> (Its title)` - and each Discussion topic, `<:handle>`, by the topic's, so whoever
-    reads it knows what is meant without asking; and each image it holds at its full path - see
-    IMAGE. Inside code, fenced or in backticks, all are text and stay as they are, as the page
-    leaves them; so does a handle nothing has. Both marks are read in one pass, so a title put in
-    is never read again for a mark of its own."""
+    `<#handle> (Its title)` - and each Discussion topic, `<:handle>`, and feature, `<$HANDLE>`, by
+    its own, so whoever reads it knows what is meant without asking; and each image it holds at its
+    full path - see IMAGE. Inside code, fenced or in backticks, all are text and stay as they are,
+    as the page leaves them; so does a handle nothing has. Every mark is read in one pass, so a
+    title put in is never read again for a mark of its own."""
     titles = {}
 
     def titled(m):
@@ -1201,9 +1246,12 @@ def with_titles(t, text):
         if key not in titles:
             if m.group(1) == '#':
                 found = stage_and_title(t, m.group(2))
-                titles[key] = found[1] if found else None
-            else:
+                # Text written before features had a mark of their own named them <#HANDLE>.
+                titles[key] = found[1] if found else feature_title(t, m.group(2))
+            elif m.group(1) == ':':
                 titles[key] = topic_title(t, m.group(2))
+            else:
+                titles[key] = feature_title(t, m.group(2))
         return f'{m.group(0)} ({titles[key]})' if titles[key] else m.group(0)
     def located(m):
         target = m.group(2).strip()
@@ -1416,30 +1464,41 @@ def heard(t, args):
     print(f'{args.handle}: transcript written under {args.path}, {len(transcript)} characters')
 
 
-def find(t, handle):
-    """An item wherever it is: (where, first line, last line, fields, closed) - `where` the text
-    its lines are in, the tracker's own or a part of its History's. Reading a closed one is every
-    agent's to do - it is changing one that is a person's."""
+def find_any(t, handle):
+    """What a handle names, with its kind first: an item wherever it is - ('item', where, first
+    line, last line, fields, closed), `where` the text its lines are in, the tracker's own or a part
+    of its History's; reading a closed one is every agent's to do, changing one a person's - or a
+    topic of the Discussion tab, or a feature, both in the tracker's own text: ('topic', t, first
+    line, last line, fields, False). An item first, then a topic - their handles are one pool, so
+    one is never both - then a feature, whose handle is in capitals and matched as written."""
     hits = [e for e in t.items() if e[2].get('handle') == handle]
     if hits:
-        return (t, *hits[0], False)
+        return ('item', t, *hits[0], False)
     hits = [e for e in t.closed() if e[3].get('handle') == handle]
     if hits:
-        return (*hits[0], True)
-    sys.exit(f'no item {handle}')
+        return ('item', *hits[0], True)
+    for kind, entries in (('topic', t.topics), ('feature', t.features)):
+        hits = [e for e in entries() if e[2].get('handle') == handle]
+        if hits:
+            return (kind, t, *hits[0], False)
+    sys.exit(f'no item, topic or feature {handle}'
+             + (" - a feature's handle is in capitals" if handle.upper() in {f.get('handle') for *_, f in t.features()} else ''))
 
 
 def show(t, args):
     # Another project's item, read in its own tracker: what is around it is around it there.
     t, handle = t.resolve(args.handle)
-    where, top, bottom, f, closed = find(t, handle)
+    kind, where, top, bottom, f, closed = find_any(t, handle)
     said = where.nested(top, bottom, TALK)
+    if kind != 'item':
+        show_entry(t, args, kind, f, said)
+        return
     rows, more = related(t, f, handle)
     lines = show_lines(t, args, f, closed, said, rows, more)
     if args.json:
         # The text as well, as `show` prints it: the loop puts it in a prompt, and reads the
         # fields too, in one call rather than two (trackerstart).
-        print(json.dumps(dict(f, closed=closed, waiting=[] if closed else waiting_on(t, f),
+        print(json.dumps(dict(f, kind='item', closed=closed, waiting=[] if closed else waiting_on(t, f),
                               related=[dict(zip(('relation', 'handle', 'stage', 'title'), r)) for r in rows],
                               comments=said, work=where.nested(top, bottom, WORK), text='\n'.join(lines))))
         return
@@ -1472,6 +1531,52 @@ def show_lines(t, args, f, closed, said, rows, more):
     for c in said:
         out.append(f'\n--- {c.get("at", "")[:16].replace("T", " ")}  {c.get("author", "")}\n{with_titles(t, c.get("body", ""))}')
     return out
+
+
+def feature_related(t, f):
+    """The features around one, as (relation, handle, standing, title): those it needs, excludes and
+    goes with, then those that name it so - needed by, excluded by, goes with - where it does not
+    name them back. A handle no feature has is shown as it is written, with a ? for its standing."""
+    others = {g.get('handle'): g for *_, g in t.features() if g.get('handle')}
+    row = lambda rel, h: (rel, h, others[h]['standing'] if h in others else '?', others.get(h, {}).get('title', ''))
+    rows = [row(word, h) for r, word in FEATURE_RELATIONS.items() for h in split(f.get(r))]
+    back = {'requires': 'needed by', 'incompatible': 'excluded by', 'synergies': 'goes with'}
+    for r, word in back.items():
+        mine = split(f.get(r))
+        rows += [row(word, h) for h, g in others.items() if f.get('handle') in split(g.get(r)) and h not in mine]
+    return rows
+
+
+def show_entry(t, args, kind, f, said):
+    """A topic or a feature, as `show` prints it: its fields, what it is and how text names it, a
+    feature's texts and the features around it, and its conversation - with --json, all of that as
+    fields, and the text as well."""
+    mark = ':' if kind == 'topic' else '$'
+    names = (['added', 'handle', 'owner', 'title', 'pinned', 'touched_at'] if kind == 'topic'
+             else FEATURE_ORDER)
+    out = [f'{name:10} {f[name]}' for name in names if f.get(name) not in (None, '', 'false')]
+    what = 'a Discussion topic' if kind == 'topic' else 'a feature of the Features tab'
+    out.append(f'kind       {kind} - {what}, named <{mark}{f.get("handle")}> in text: read it and comment on it, '
+               'never work it')
+    if t.project != Path(args.doc).stem:
+        out.append(f'project    {t.project} - another project\'s {kind}: read it here, change nothing in it')
+    rows = feature_related(t, f) if kind == 'feature' else []
+    if kind == 'feature':
+        for name in FEATURE_DETAIL:
+            out.append(f'\n## {name}\n\n{with_titles(t, f[name]) if f.get(name) else "(nothing written)"}')
+    if rows:
+        width = max(len(r[1]) for r in rows)
+        out.append('\nrelated - tracker.py show <HANDLE> for any of them:')
+        for rel, h, standing, title in rows:
+            out.append(f'  {rel:11} {h:{width}}  {standing:10} {title}')
+    out.append(f'\nconversation, oldest first: {len(said) or "nothing said yet"}')
+    for c in said:
+        out.append(f'\n--- {c.get("at", "")[:16].replace("T", " ")}  {c.get("author", "")}\n{with_titles(t, c.get("body", ""))}')
+    if args.json:
+        extra = {'related': [dict(zip(('relation', 'handle', 'standing', 'title'), r)) for r in rows]} if kind == 'feature' else {}
+        print(json.dumps(dict(f, kind=kind, closed=False, comments=said, **extra, text='\n'.join(out))))
+        return
+    print('\n'.join(out))
 
 
 def about(t, args):
@@ -1587,14 +1692,14 @@ def author():
     return os.environ.get('AGENT_AUTHOR') or 'agent'
 
 
-def add_comment(t, handle, text, literal=False):
+def add_comment(t, handle, text, literal=False, entry=None):
     """Add a comment at the end of an open item's conversation, dated now and signed by whoever
-    AGENT_AUTHOR names - `literal` when the text is already read, so an @ at its start is text. Says
-    what it added."""
+    AGENT_AUTHOR names - `literal` when the text is already read, so an @ at its start is text - or
+    of the topic or feature whose lines `entry` gives. Says what it added."""
     body = text.strip() if literal else text_of(text)
     if not body:
         sys.exit('a comment with nothing in it')
-    top, bottom, _ = t.item(handle)
+    top, bottom = entry or t.item(handle)[:2]
     values, signed = comment(t, body)
     t.add_nested(top, bottom, TALK, values)
     return f'comment added, signed {signed}, {len(body)} characters'
@@ -1613,7 +1718,13 @@ def comment(t, body):
 def note(t, args):
     """A comment on any open item, whatever its stage or flags: it changes neither, so an item
     waiting on a person or on its parts takes one as well - something its reader should know. A
-    closed one does not: t.item refuses History."""
+    closed one does not: t.item refuses History. A topic of the Discussion tab or a feature takes one
+    too, in its own conversation - this project's, as an item's is."""
+    if ':' not in args.handle and not any(f.get('handle') == args.handle for _, _, f in t.items()):
+        kind, _, top, bottom, _, closed = find_any(t, args.handle)
+        if kind != 'item':
+            print(f'{args.handle}: {add_comment(t, args.handle, args.text, entry=(top, bottom))}')
+            return
     t.item(args.handle)
     said = add_comment(t, args.handle, args.text)
     print(f'{args.handle}: {said}')

@@ -243,9 +243,9 @@ one, `Stages`, `Labels` and `Flags` the vocabularies. An open item looks like th
   `<#handle>`, which the page draws as the item's chip; backticks are for code, and a `<#handle>`
   inside them stays text. Write the handle alone - the title `tracker.py show` puts after it, as
   `<#handle> (Its title)`, is for you to read, not to copy. A topic of the project's Discussion
-  tab is written `<:handle>` instead, with a mark of its own - never `<#handle>`, which is only an
-  item's - and `show` titles it the same way. The `NEXT:` line and the commands'
-  arguments take plain handles. An image in a comment - a screenshot the owner pasted - is kept
+  tab is written `<:handle>` instead, and a feature of its Features tab `<$HANDLE>`, its handle in
+  capitals - each with a mark of its own, never `<#handle>`, which is only an item's - and `show`
+  titles both the same way. The `NEXT:` line and the commands' arguments take plain handles. An image in a comment - a screenshot the owner pasted - is kept
   with the tracker, `![](images/<project>/<name>.png)`; `tracker.py show` prints it at a path on
   this machine, a copy it fetched into your scratch folder. Open it
   with your file-reading tool, which shows images: when a comment holds one, it is usually what
@@ -257,6 +257,14 @@ one, `Stages`, `Labels` and `Flags` the vocabularies. An open item looks like th
   alone needs no picture. A `![transcribed](sounds/...)` with a quote under it is a voice message
   of the comment's author, transcribed by the loop: read the quote as their own words - and still
   never edit a comment yourself.
+- **Discussion and Features.** Beside the items a tracker may hold the topics of its Discussion
+  tab - anything to talk over that is neither an item nor a feature - and the features of its
+  Features tab: what the project could become, each with its standing (proposed, wanted, accepted
+  or discarded), its description, pros and cons, and the features it needs, excludes or goes with.
+  `tracker.py show <handle>` reads a topic or a feature as it reads an item, and `tracker.py note
+  <handle> <text>` adds a comment to its conversation - when the work you are on bears on it, or
+  it asks for a view you have. Neither is ever work: the loop never picks one, no stage or flag is
+  theirs, and no other command takes their handles.
 - **An item's work** is its `Agents/Work` list: one record per loop session on it - when, what
   kind, which model, where it moved the item, its points, and what the session cost, read,
   wrote and changed. The loop writes it after your session; never write or edit one yourself.

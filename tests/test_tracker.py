@@ -191,3 +191,153 @@ def test_show_titles_items_and_discussion_topics_by_their_marks():
 def test_a_topic_mention_in_a_tracker_with_no_discussion_stays_as_it_is(server):
     t = tracker.Tracker(DOC, server)
     assert tracker.with_titles(t, "<:naming> and <#alpha>") == "<:naming> and <#alpha> (The alpha item)"
+
+
+# Item trackerfeatures: tracker.py shows, names and comments on Discussion topics and Features.
+FEATURES = """    - Features {
+        - {
+            - added = "2026-11-01T00:00:00+00:00"
+            - handle = "SEARCH"
+            - standing = "wanted"
+            - title = "Find anything"
+            - requires = "INDEX"
+            - synergies = "TAGS"
+            - x = 10
+            - y = 20
+            div Detail {
+                - description = "Search over <$INDEX> and <#alpha>."
+                - pros = "Fast"
+            }
+            div Talk {
+                list Comments {
+                    - {
+                        - at = "2026-11-02T00:00:00+00:00"
+                        - author = "owner"
+                        - body = "Wait for <$INDEX>; see <:naming>."
+                    }
+                }
+            }
+        }
+        - {
+            - handle = "INDEX"
+            - title = "An index of everything"
+        }
+        - {
+            - handle = "TAGS"
+            - standing = "accepted"
+            - title = "Tags"
+            - synergies = "SEARCH"
+        }
+        - {
+            - handle = "LATER"
+            - title = "Needs search"
+            - requires = "SEARCH"
+        }
+    }
+"""
+
+
+class WritingServer(StubServer):
+    """The stub, with what tracker.py appends recorded too, and a project beside the tracker."""
+
+    def __init__(self, template=None):
+        super().__init__(template)
+        self.appends: list[tuple[str, str, dict]] = []
+        self.texts[DOC] = self.texts[DOC].replace("    - History {\n", DISCUSSION + FEATURES + "    - History {\n", 1)
+
+    def append(self, name, address, fields):
+        self.appends.append((name, address, fields))
+
+    def documents(self):
+        return [n for n in self.texts if not n.startswith("library:")]
+
+
+def _shown(server, handle, capsys, as_json=False):
+    t = tracker.Tracker(DOC, server)
+    tracker.show(t, Namespace(handle=handle, json=as_json, doc=DOC))
+    out = capsys.readouterr().out
+    return json.loads(out) if as_json else out
+
+
+def test_show_prints_a_topic_with_its_mark_and_no_work(capsys):
+    out = _shown(WritingServer(), "naming", capsys)
+    assert "title      How things are named" in out
+    assert "kind       topic - a Discussion topic, named <:naming> in text" in out
+    assert "stage" not in out and "related" not in out
+    assert "conversation, oldest first: nothing said yet" in out
+
+
+def test_show_prints_a_feature_its_texts_and_the_features_around_it(capsys):
+    out = _shown(WritingServer(), "SEARCH", capsys)
+    assert "standing   wanted" in out and "named <$SEARCH> in text" in out
+    assert not any(line.startswith(("x ", "y ", "shape")) for line in out.splitlines())
+    assert "## description\n\nSearch over <$INDEX> (An index of everything) and <#alpha> (The alpha item)." in out
+    assert "## pros\n\nFast" in out and "## cons\n\n(nothing written)" in out
+    rows = [line.split() for line in out.splitlines() if line.startswith("  ")]
+    assert ["needs", "INDEX", "proposed", "An", "index", "of", "everything"] in rows
+    assert ["goes", "with", "TAGS", "accepted", "Tags"] in rows
+    assert ["needed", "by", "LATER", "proposed", "Needs", "search"] in rows
+    # TAGS names SEARCH back as it is named, so it is not listed twice.
+    assert sum(r[2:3] == ["TAGS"] or r[1:2] == ["TAGS"] for r in rows) == 1
+    assert "Wait for <$INDEX> (An index of everything); see <:naming> (How things are named)." in out
+
+
+def test_show_json_gives_the_kind(capsys):
+    server = WritingServer()
+    feature = _shown(server, "SEARCH", capsys, as_json=True)
+    assert feature["kind"] == "feature" and feature["description"].startswith("Search over")
+    assert {r["relation"] for r in feature["related"]} == {"needs", "goes with", "needed by"}
+    assert feature["comments"][0]["author"] == "owner" and "text" in feature
+    assert _shown(server, "naming", capsys, as_json=True)["kind"] == "topic"
+    assert _shown(server, "alpha", capsys, as_json=True)["kind"] == "item"
+
+
+def test_a_feature_handle_is_matched_as_written(capsys):
+    with pytest.raises(SystemExit, match="in capitals"):
+        _shown(WritingServer(), "search", capsys)
+    t = tracker.Tracker(DOC, WritingServer())
+    assert tracker.with_titles(t, "<$search>, <$NOPE> and `<$SEARCH>`") == "<$search>, <$NOPE> and `<$SEARCH>`"
+
+
+def test_a_feature_named_as_an_item_was_is_still_titled():
+    # Comments written before overseer:feature-mark named features <#HANDLE>.
+    t = tracker.Tracker(DOC, WritingServer())
+    assert tracker.with_titles(t, "<#TAGS> and <$TAGS>") == "<#TAGS> (Tags) and <$TAGS> (Tags)"
+
+
+def test_note_comments_on_a_topic_and_a_feature(capsys):
+    server = WritingServer()
+    t = tracker.Tracker(DOC, server)
+    tracker.note(t, Namespace(handle="naming", text="A view on naming."))
+    tracker.note(t, Namespace(handle="SEARCH", text="A view on search."))
+    tracker.note(t, Namespace(handle="alpha", text="On the item."))
+    addresses = [a for _, a, _ in server.appends]
+    assert addresses == ["project/Discussion/[naming]/Talk/Comments",
+                         "project/Features/[SEARCH]/Talk/Comments",
+                         "project/Items/[alpha]/Talk/Comments"]
+    assert "comment added" in capsys.readouterr().out
+
+
+def test_a_topic_or_a_feature_is_never_moved(capsys):
+    t = tracker.Tracker(DOC, WritingServer())
+    for handle in ("naming", "SEARCH"):
+        with pytest.raises(SystemExit, match="no open item"):
+            tracker.move(t, Namespace(handle=handle, stage="ready", complexity="low", note=None, points=None))
+    assert "naming" not in {f["handle"] for _, _, f in t.items()}
+
+
+def test_another_projects_topic_is_read_there(capsys):
+    server = WritingServer()
+    server.texts["agent/other.os"] = server.texts[DOC]
+    out = _shown(server, "other:naming", capsys)
+    assert "project    other - another project's topic" in out
+
+
+def test_a_tracker_whose_template_has_neither_list_still_reads(capsys):
+    template = (FIXTURES / "project_template.os").read_text(encoding="utf-8")
+    template = "\n".join(l for l in template.splitlines() if "list Discussion" not in l and "list Features" not in l)
+    t = tracker.Tracker(DOC, StubServer(template))
+    assert t.topics() == [] and t.features() == []
+    assert tracker.with_titles(t, "<$SEARCH> and <:naming>") == "<$SEARCH> and <:naming>"
+    with pytest.raises(SystemExit, match="no item, topic or feature nowhere"):
+        tracker.show(t, Namespace(handle="nowhere", json=False, doc=DOC))

@@ -16,7 +16,7 @@ items.
     python features.py note <HANDLE> <text>         add a comment to its conversation
 
 A feature's handle is in capitals - SELF-APPLY - so it is never taken for an item's. Text names a
-feature as <#HANDLE>, which the tab draws as its chip, as items are named in theirs. Excluding and
+feature as <$HANDLE>, which the tab draws as its chip, as items are named <#handle> in theirs. Excluding and
 going with are both ways: a link or unlink of incompatible or synergies writes both features;
 requires is one way - A needs B says nothing of B.
 
@@ -32,13 +32,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tracker
-from tracker import FIELD, indent_of, quoted, value_of
+from tracker import quoted
 
 # The order a feature's fields are in: the template's. The texts are in its Detail fold, its
-# comments in its Talk fold, Detail first.
-ORDER = ['added', 'handle', 'standing', 'title', 'requires', 'incompatible', 'synergies', 'touched_at']
-DETAIL = ['description', 'pros', 'cons']
-RELATIONS = {'requires': 'needs', 'incompatible': 'excludes', 'synergies': 'goes with'}
+# comments in its Talk fold, Detail first. tracker.py reads features too, for show and note.
+ORDER = tracker.FEATURE_ORDER
+DETAIL = tracker.FEATURE_DETAIL
+RELATIONS = tracker.FEATURE_RELATIONS
 BOTH_WAYS = {'incompatible', 'synergies'}
 DEFAULT_STANDING = 'proposed'
 HANDLE = re.compile(r'[A-Z0-9][A-Z0-9-]*')
@@ -54,18 +54,7 @@ class Features:
 
     def all(self):
         """Every feature, as (first line, last line, fields), its Detail texts among the fields."""
-        found = []
-        for top, bottom, f in self.t.entries('Features'):
-            f.setdefault('standing', DEFAULT_STANDING)
-            detail = self.t.block(top, bottom, 'div Detail')
-            if detail and detail[0] != detail[1]:
-                own = indent_of(self.t.lines[detail[0]]) + '    '
-                for line in self.t.lines[detail[0] + 1:detail[1]]:
-                    m = FIELD.match(line)
-                    if m and m.group(1) == own:
-                        f[m.group(2)] = value_of(m.group(3))
-            found.append((top, bottom, f))
-        return found
+        return self.t.features()
 
     def handles(self):
         return [f.get('handle') for _, _, f in self.all()]
@@ -147,18 +136,9 @@ def relate(fs, handle, relation, others, add):
 
 
 def with_titles(fs, text):
-    """A text with each feature it names followed by its title - <#SELF-APPLY> (its title) - and
-    items named so by theirs, as tracker.py shows them; code is left as it is."""
-    titles = {f.get('handle'): f.get('title', '') for _, _, f in fs.all()}
-
-    def titled(m):
-        h = m.group(1)
-        if titles.get(h):
-            return f'{m.group(0)} ({titles[h]})'
-        found = tracker.stage_and_title(fs.t, h) if not HANDLE.fullmatch(h) else None
-        return f'{m.group(0)} ({found[1]})' if found else m.group(0)
-    parts = re.split(r'(```.*?```|`[^`\n]*`)', text, flags=re.S)
-    return ''.join(p if i % 2 else tracker.MENTION.sub(titled, p) for i, p in enumerate(parts))
+    """A text with each feature, item and topic it names followed by its title, as tracker.py shows
+    them; code is left as it is."""
+    return tracker.with_titles(fs.t, text)
 
 
 def cmd_list(fs, args):
